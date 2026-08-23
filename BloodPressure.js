@@ -787,8 +787,16 @@ const resultSubscription = ViatomDeviceManager.addListener('onMeasurementResult'
   
   console.log('[BP] Final Result received:', evt);
 
-  // Create unique key for this result
-  const resultKey = `result_${evt.systolic}_${evt.diastolic}_${evt.pulse}_${Date.now()}`;
+  // Dedup key for a re-fired native result event. The old key appended
+  // `Date.now()` (per-millisecond), so it was unique every call and
+  // `processedResults.has(key)` could NEVER match -> a re-fired event was
+  // re-processed, each build stamped a fresh timestamp, and the backend stored a
+  // second row. Bucket the time to ~15s instead: a genuine double-fire (ms apart)
+  // lands in the same bucket and is deduped, while two real readings >=15s apart
+  // keep distinct keys and are both stored (no data loss). The server-side
+  // idempotency is the backstop for network retries.
+  const timeBucket = Math.floor(Date.now() / 15000);
+  const resultKey = `result_${evt.systolic}_${evt.diastolic}_${evt.pulse}_${timeBucket}`;
   
   // Check for duplicates
   if (processingRef.current || processedResults.has(resultKey)) {
