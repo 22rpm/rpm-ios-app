@@ -430,7 +430,11 @@ export default function BloodPressure({ navigation }) {
 const [manualConnectionMode, setManualConnectionMode] = useState(false);
 const [selectedDevice, setSelectedDevice] = useState(null);
   const [connectionVerified, setConnectionVerified] = useState(false);
-  
+  // Q4/Q2: silent auto-reconnect status (no modal/toast churn while it tries).
+  const [reconnecting, setReconnecting] = useState(false);
+  // Q3: after a connect, prompt the patient to start the reading on the cuff.
+  const [readyPrompt, setReadyPrompt] = useState(false);
+
   // Measurement State - Single source of truth
   const [measurementState, setMeasurementState] = useState({
     isMeasuring: false,
@@ -673,7 +677,10 @@ const handleRealTimeData = useCallback((data) => {
     const defl = !!data.isDeflating;
     const infl = typeof data.isInflating === 'boolean' ? !!data.isInflating : !defl;
     const phase = data.phase || (defl ? 'deflating' : 'inflating');
-    
+
+    // Q3: the reading has started on the cuff — the "press start" prompt is done.
+    if (readyPrompt) setReadyPrompt(false);
+
     setRealTimeData({
       type: 'BP_PROGRESS',
       pressure: Number(data.pressure) || 0,
@@ -754,12 +761,18 @@ const connectionSubscription = ViatomDeviceManager.addListener('onDeviceConnecte
   connectedDeviceRef.current = deviceInfo;
   setConnectionVerified(true);
   console.log('💾 Stored device in ref:', connectedDeviceRef.current);
-  
+
+  // Q2/Q3: the connect succeeded — end the silent reconnect, auto-dismiss the
+  // device picker (no manual "close"), and prompt the patient to start the reading.
+  setReconnecting(false);
+  setShowDeviceModal(false);
+  setReadyPrompt(true);
+
   ViatomDeviceManager.requestDeviceInfo?.();
   ViatomDeviceManager.requestBPConfig?.();
-  
+
   ViatomDeviceManager.stopScan?.();
-  
+
   // Force UI update
   setConnectedDevice(prev => ({...prev}));
 });
@@ -769,11 +782,15 @@ const disconnectionSubscription = ViatomDeviceManager.addListener('onDeviceDisco
   setConnectedDevice(null);
   connectedDeviceRef.current = null;
   setConnectionVerified(true); // Mark disconnection as verified
+  setReadyPrompt(false);       // Q3: the ready prompt is stale once disconnected
   resetMeasurementState();
-  
+
   // Force UI update
   setConnectedDevice(null);
-  
+
+  // Q4: the cuff disconnects after each reading — try to reconnect SILENTLY
+  // (native retrieve+reconnect via the scan), no modal/toast churn.
+  setReconnecting(true);
   setTimeout(() => safeStartScan(), 600);
 });
 
@@ -936,62 +953,38 @@ useFocusEffect(
   useCallback(() => {
     console.log('[BP] Screen focused, checking connection state');
 
-    // Reset connection verification on fresh start
-    if (!connectionVerified) {
-      console.log('[BP] Fresh start - resetting connection state');
-      setConnectedDevice(null);
-      connectedDeviceRef.current = null;
-    }
-
+    // Q4/Q2: clean auto-reconnect. The native manager persists the last device
+    // UUID and reconnects to it (retrievePeripherals + connect) as part of the
+    // scan, so on focus we start that quietly — NO device modal, NO toast, and no
+    // resetting of an existing connection. The patient just sees "Reconnecting…".
+    // Only if it doesn't connect within the window do we fall back to the manual
+    // picker — the modal is now a fallback, not the default.
     ViatomDeviceManager.enableAutoReconnect?.(true);
 
-    if (!connectedDevice) {
-      console.log('[BP] No connected device, starting scan');
-      safeStartScan();
-
-      // ⏳ 3-second timeout for fallback to manual connect
-      const connectionTimeout = setTimeout(() => {
-        if (!connectedDevice) {
-          console.log('[BP] Connection timeout - reverting to manual mode');
-          ViatomDeviceManager.stopScan?.();
-
-          // 🧩 Explicitly reset UI state
-          setConnectedDevice(null);
-          connectedDeviceRef.current = null;
-          setConnectionVerified(false);
-
-          // 🖐 open manual connect modal
-          setShowDeviceModal(true);
-
-          // 🗨 notify user
-          showToastMessage('Device not found. Please connect manually.');
-        }
-      }, 3000); // 3 sec
-
-      // ⏱️ 15-second safety timeout for long scans
-      const scanTimeout = setTimeout(() => {
-        if (!connectedDevice) {
-          console.log('[BP] Extended scan complete, stopping');
-          ViatomDeviceManager.stopScan?.();
-          if (!connectionVerified) {
-            setConnectionVerified(true);
-          }
-        }
-      }, 15000);
-
-      return () => {
-        clearTimeout(scanTimeout);
-        clearTimeout(connectionTimeout);
-      };
-    } else {
-      console.log('[BP] Device already connected:', connectedDevice.name);
+    if (connectedDevice) {
+      console.log('[BP] Already connected:', connectedDevice.name);
       setConnectionVerified(true);
+      return undefined;
     }
 
-    return () => {
-      console.log('[BP] Screen unfocused - keeping background connection');
-    };
-  }, [connectedDevice, safeStartScan, connectionVerified])
+    console.log('[BP] Not connected — attempting silent auto-reconnect');
+    setReconnecting(true);
+    safeStartScan();
+
+    // Single fallback: if nothing connects in 10s, stop scanning and open the
+    // manual picker ONCE. (No 3s auto-modal, no toast spam.)
+    const fallbackTimer = setTimeout(() => {
+      if (!connectedDeviceRef.current) {
+        console.log('[BP] Auto-reconnect timed out — manual picker');
+        ViatomDeviceManager.stopScan?.();
+        setReconnecting(false);
+        setConnectionVerified(true);
+        setShowDeviceModal(true);
+      }
+    }, 10000);
+
+    return () => clearTimeout(fallbackTimer);
+  }, [connectedDevice, safeStartScan])
 );
 
 
@@ -1487,6 +1480,22 @@ const renderDeviceConnectionModal = () => (
         </View>
       </SafeAreaView>
 
+      {/* Q4: silent reconnect status (no modal churn) */}
+      {reconnecting && !connectedDevice && (
+        <View style={styles.reconnectBanner}>
+          <ActivityIndicator size="small" color={globalStyles.primaryColor.color} />
+          <Text style={styles.reconnectBannerText}>Reconnecting to your device…</Text>
+        </View>
+      )}
+      {/* Q3: after connect, tell the patient the next step */}
+      {readyPrompt && connectedDevice && (
+        <View style={styles.readyBanner}>
+          <Text style={styles.readyBannerText}>
+            Connected. Press Start on the BP machine to take your reading.
+          </Text>
+        </View>
+      )}
+
       {renderConnectionStatus()}
       {renderErrorDisplay()}
       {renderDeviceControls()}
@@ -1695,6 +1704,22 @@ const renderDeviceConnectionModal = () => (
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#ebf2f9' },
+  reconnectBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#eef4fb',
+  },
+  reconnectBannerText: { color: '#334155', fontSize: 14 },
+  readyBanner: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#e7f6ec',
+  },
+  readyBannerText: { color: '#166534', fontSize: 14, textAlign: 'center', fontWeight: '500' },
   header: {
     width: '100%',
     height: SCREEN_HEIGHT * 0.08,
