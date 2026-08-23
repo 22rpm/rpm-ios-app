@@ -29,6 +29,13 @@ export default function Login({ navigation }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
+  // Q1 lockout fix: advance the attempt count via a REF (the retry setTimeout
+  // captured a stale `autoFaceIdAttempts=0`, so it never reached 2 -> infinite
+  // Face-ID loop with no path to the password field). `manualEscapeRef` is a hard
+  // stop: once the user opts for the password, no pending retry re-opens Face ID.
+  const attemptsRef = useRef(0);
+  const manualEscapeRef = useRef(false);
+
   // Initialize app
   useEffect(() => {
     const initializeApp = async () => {
@@ -87,29 +94,40 @@ export default function Login({ navigation }) {
     ]).start();
   };
 
+  // Escape hatch: stop the Face-ID loop and show the password field. Independent
+  // of the attempt counter, so the user is never stuck regardless of loop state.
+  const goToManualLogin = () => {
+    manualEscapeRef.current = true;
+    setShowManualLogin(true);
+    animateFormIn();
+  };
+
   const triggerAutoFaceId = async () => {
-    if (isAutoAuthenticating || showManualLogin) return;
-    
+    if (isAutoAuthenticating || manualEscapeRef.current || showManualLogin) return;
+
     setIsAutoAuthenticating(true);
-    console.log(`Auto Face ID attempt ${autoFaceIdAttempts + 1}`);
+    console.log(`Auto Face ID attempt ${attemptsRef.current + 1}`);
 
     try {
       const rnBiometrics = new ReactNativeBiometrics();
-      
+
       const storedEmail = await AsyncStorage.getItem('biometric_email');
       const promptMessage = 'Face ID for ' + (storedEmail || 'your account');
-      
+
       const { success } = await rnBiometrics.simplePrompt({
         promptMessage: promptMessage,
         cancelButtonText: 'Use Password',
       });
 
       if (success) {
-        // Biometric authentication successful
         await performAutoLogin();
       } else {
-        // User cancelled or failed
-        handleFaceIdFailure();
+        // Non-success = the user reached the system prompt's "Use Password"
+        // fallback (after iOS's own internal retries). Go STRAIGHT to the password
+        // field — never re-show the system sheet on top of the app. That
+        // re-showing was the trap: the app's Use-Password button sat behind an
+        // ever-reappearing Face-ID sheet.
+        goToManualLogin();
       }
     } catch (error) {
       console.error('Auto Face ID error:', error);
@@ -119,18 +137,18 @@ export default function Login({ navigation }) {
     }
   };
 
+  // Only reached on a THROWN error (e.g. sensor failure), not on user cancel.
+  // Uses attemptsRef so the count advances across the retry setTimeout (the old
+  // code read a stale `autoFaceIdAttempts`, so it never reached 2).
   const handleFaceIdFailure = () => {
-    const newAttempts = autoFaceIdAttempts + 1;
-    setAutoFaceIdAttempts(newAttempts);
+    attemptsRef.current += 1;
+    setAutoFaceIdAttempts(attemptsRef.current); // keep the "Attempt X of 2" display in sync
 
-    if (newAttempts >= 2) {
-      // After 2 failed attempts, show manual login
-      setShowManualLogin(true);
-      animateFormIn();
+    if (attemptsRef.current >= 2 || manualEscapeRef.current) {
+      goToManualLogin();
     } else {
-      // Retry after 1.5 second
       setTimeout(() => {
-        if (!showManualLogin) {
+        if (!manualEscapeRef.current && !showManualLogin) {
           triggerAutoFaceId();
         }
       }, 1500);
@@ -639,12 +657,9 @@ export default function Login({ navigation }) {
               Attempt {Math.min(autoFaceIdAttempts + 1, 2)} of 2
             </Text>
             
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.usePasswordButton}
-              onPress={() => {
-                setShowManualLogin(true);
-                animateFormIn();
-              }}
+              onPress={goToManualLogin}
             >
               <Text style={styles.usePasswordText}>Use Password Instead</Text>
             </TouchableOpacity>
