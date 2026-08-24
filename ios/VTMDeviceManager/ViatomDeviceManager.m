@@ -13,6 +13,12 @@ static const NSTimeInterval kScanRestartDelay = 0.35;
 // never times out on its own). On expiry we stop, cancel the pending connect,
 // and surface the failure to JS exactly once.
 static const NSTimeInterval kReconnectWindow = 15.0;
+// Final-result dedup window. A duplicate result PACKET for the same reading
+// arrives within ~1-2s; two genuinely distinct BP readings are >=~30s apart (the
+// inflate/deflate cycle), so a window well inside that gap blocks duplicate
+// packets without ever swallowing a real second reading. Content + time based,
+// so it needs no measurement-start/-end detection to be correct.
+static const NSTimeInterval kResultDedupWindow = 15.0;
 
 // Persist keys
 static NSString * const kSavedPeripheralUUIDKey = @"rpm.viatom.savedPeripheralUUID";
@@ -70,7 +76,13 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 @property (nonatomic, assign) BOOL voiceEnabled;
 @property (nonatomic, strong) AVSpeechSynthesizer *tts;
 
-@property (nonatomic, assign) BOOL hasSentFinalResult;
+// Result dedup: signature (values) of the last accepted result + when it was
+// accepted. Replaces the old sticky `hasSentFinalResult` boolean, which was reset
+// only on measurement-START detection and so blocked every reading whose start
+// wasn't detected (e.g. a missed "measurement ended" status left the prior
+// measurement's flag stuck) -- a false "duplicate" that dropped real readings.
+@property (nonatomic, strong) NSString *lastResultSig;
+@property (nonatomic, assign) NSTimeInterval lastResultAt;
 
 // Bounded auto-reconnect (kReconnectWindow, cancellable). reconnectInProgress
 // gates the silent retry loop; the deadline timer owns the stop condition;
@@ -287,7 +299,7 @@ RCT_EXPORT_MODULE();
         self.isDeviceInitiatedMeasurement = YES;
         self.isWaitingForBPResult = YES;
         self.lowPressureStreak = 0;
-        self.hasSentFinalResult = NO;  
+        self.lastResultSig = nil;  // re-arm dedup at measurement start  
         
         [self sendEventWithName:@"onBPStatusChanged" 
                            body:@{@"status": @"measurement_started", 
@@ -340,7 +352,8 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
     self.isDeviceInitiatedMeasurement = NO;
     self.isWaitingForBPResult = NO;
     self.lowPressureStreak = 0;
-    
+    self.lastResultSig = nil;  // re-arm dedup on any terminal transition
+
     [self stopRealDataPuller];
     [self.measurementTimeoutTimer invalidate];
     self.measurementTimeoutTimer = nil;
@@ -1150,7 +1163,7 @@ if (n == 34 || n == 36 || n == 38 || n == 40 || n == 44) {
     self.isDeviceInitiatedMeasurement = NO; // App-initiated
     self.isWaitingForBPResult = YES;
     self.lowPressureStreak = 0;
-    self.hasSentFinalResult = NO;
+    self.lastResultSig = nil;  // re-arm dedup at measurement start
 
     self.measurementStartTime = [NSDate date];
 
@@ -1406,12 +1419,21 @@ RCT_EXPORT_METHOD(clearPendingResult:(NSString *)recordId) {
 }
 
 - (void)sendFinalBPResultOnce:(NSDictionary *)result {
-    if (self.hasSentFinalResult) {
-        NSLog(@"[Viatom] ⚠️ Duplicate BP result blocked");
+    // Content + time dedup: block only a duplicate PACKET of the SAME reading
+    // within kResultDedupWindow. A genuinely new reading (different values, or the
+    // same values >=~30s later) is never blocked — no dependence on start/end
+    // detection, which is what made the old sticky boolean drop readings.
+    NSString *sig = [NSString stringWithFormat:@"%@|%@|%@|%@",
+                     result[@"systolic"], result[@"diastolic"],
+                     result[@"pulse"], result[@"meanPressure"]];
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (self.lastResultSig && [self.lastResultSig isEqualToString:sig]
+        && (now - self.lastResultAt) < kResultDedupWindow) {
+        NSLog(@"[Viatom] Duplicate BP result within %.0fs — skipping", kResultDedupWindow);
         return;
     }
-
-    self.hasSentFinalResult = YES;
+    self.lastResultSig = sig;
+    self.lastResultAt = now;
 
     // WRITE FIRST. Persist to the durable outbox before any JS notification or
     // UI update, so a crash immediately after cannot lose the reading.
