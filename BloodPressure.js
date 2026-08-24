@@ -858,6 +858,12 @@ const resultSubscription = ViatomDeviceManager.addListener('onMeasurementResult'
       
       switch (payload?.status) {
         case 'measurement_started':
+          // SAFETY: clear any prior result the instant a new measurement starts,
+          // regardless of whether this measurement's packets ever arrive. Without
+          // this, a reading that produces no result packet leaves the PREVIOUS
+          // reading's value on screen — a patient could read a number that was
+          // never theirs. Independent of the packet-loss root cause.
+          setRealTimeData(null);
           updateMeasurementState({
             isMeasuring: true,
             isDeviceInitiated: payload.deviceInitiated || false,
