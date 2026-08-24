@@ -1071,8 +1071,17 @@ if (n == 34 || n == 36 || n == 38 || n == 40 || n == 44) {
 }
 
 - (void)startRealDataPuller {
+    // Pause the 1 Hz status poll while a measurement is active. GetRealData
+    // responses already carry run_status (MeasureEnd is still detected at the
+    // GetRealData parse path), so this loses no completion signal and removes the
+    // status command from contending with the result packet on the shared BLE
+    // command queue.
+    [self stopStatusPoller];
     [self.realDataPullTimer invalidate];
-    self.realDataPullTimer = [NSTimer scheduledTimerWithTimeInterval:0.12
+    // ~2.5 Hz (was 8.3 Hz). At 8 Hz a 3-packet low-pressure dip was only ~0.36s
+    // (hair-triggering the removed heuristic) and the flood competed with result
+    // delivery. 2.5 Hz keeps the progress UI smooth with far less contention.
+    self.realDataPullTimer = [NSTimer scheduledTimerWithTimeInterval:0.4
                                                             target:self
                                                           selector:@selector(pullRealData)
                                                           userInfo:nil
@@ -1082,6 +1091,9 @@ if (n == 34 || n == 36 || n == 38 || n == 40 || n == 44) {
 - (void)stopRealDataPuller {
     [self.realDataPullTimer invalidate];
     self.realDataPullTimer = nil;
+    // Measurement over — resume the status poll so the next device-button start
+    // is detected.
+    [self startStatusPoller];
 }
 
 - (void)pullRealData {
@@ -1184,8 +1196,9 @@ if (n == 34 || n == 36 || n == 38 || n == 40 || n == 44) {
         [self.viatomUtils requestBPRealData];
         [self startRealDataPuller];
     });
-    
-    [self startStatusPoller];
+
+    // Status poll intentionally NOT started here — startRealDataPuller pauses it
+    // for the duration of the measurement and stopRealDataPuller resumes it.
     [self startMeasurementTimeoutTimer];
 
     [self sendEventWithName:@"onRealTimeData"
