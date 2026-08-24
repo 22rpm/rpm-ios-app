@@ -312,6 +312,7 @@ RCT_EXPORT_MODULE();
         [self speak:@"Measurement started"];
         
         NSLog(@"[Viatom] Measurement started - Device initiated: YES");
+        NSLog(@"📊BPTRACE ===== MEASUREMENT START (device-initiated) =====");
     }
     // Measurement ended normally
 // Measurement ended normally
@@ -353,6 +354,7 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
     self.isWaitingForBPResult = NO;
     self.lowPressureStreak = 0;
     self.lastResultSig = nil;  // re-arm dedup on any terminal transition
+    NSLog(@"📊BPTRACE ===== MEASUREMENT END reason=%@ completed=%d =====", reason, completed);
 
     [self stopRealDataPuller];
     [self.measurementTimeoutTimer invalidate];
@@ -866,13 +868,18 @@ commandCompletion:(u_char)cmdType
  deviceType:(VTMDeviceType)deviceType
     response:(NSData *)response
 {
-    RCTLogInfo(@"[Viatom] commandCompletion cmd:0x%02X devType:%d respLen:%lu",
-               cmdType, deviceType, (unsigned long)response.length);
+    // 📊BPTRACE: raw funnel. Every command response the SDK delivers, with its
+    // command byte, length, and full bytes. If a measurement's result never shows
+    // up here, the loss is at/below the SDK (BLE/CRC), above anything we parse.
+    NSLog(@"📊BPTRACE cmd=0x%02X devType=%d len=%lu bytes=%@",
+          cmdType, deviceType, (unsigned long)response.length, response);
 
     if (cmdType == VTMBPCmdGetRealData) {
         const uint8_t *p = (const uint8_t *)response.bytes;
         const NSUInteger n = response.length;
-        
+        NSLog(@"📊BPTRACE GetRealData n=%lu waitingForResult=%d measuring=%d",
+              (unsigned long)n, self.isWaitingForBPResult, self.isMeasurementInProgress);
+
         if (n == 2) {
             const double mmHg = vt_normalize_pressure(vt_s16le(p));
             [self sendEventWithName:@"onRealTimeData" body:@{
@@ -923,7 +930,10 @@ commandCompletion:(u_char)cmdType
             uint16_t dia = vt_u16le(p + 5);
             uint16_t mean = vt_u16le(p + 7);
             uint16_t pulse = vt_u16le(p + 9);
-            if (vt_plausible_result_values(sys, dia, mean, pulse)) {
+            BOOL plausible20 = vt_plausible_result_values(sys, dia, mean, pulse);
+            NSLog(@"📊BPTRACE n==20 RESULT-candidate sys=%u dia=%u mean=%u pulse=%u plausible=%d",
+                  sys, dia, mean, pulse, plausible20);
+            if (plausible20) {
                 [self sendFinalBPResultOnce:@{
 
                   @"type": @"BP_RESULT",
@@ -969,7 +979,10 @@ commandCompletion:(u_char)cmdType
 
 if (n == 34 || n == 36 || n == 38 || n == 40 || n == 44) {
     uint16_t sys=0,dia=0,mean=0,pulse=0;
-    if (vt_try_extract_result(response, &sys, &dia, &mean, &pulse)) {
+    BOOL extracted = vt_try_extract_result(response, &sys, &dia, &mean, &pulse);
+    NSLog(@"📊BPTRACE n==%lu RESULT-candidate extracted=%d sys=%u dia=%u mean=%u pulse=%u",
+          (unsigned long)n, extracted, sys, dia, pulse);
+    if (extracted) {
         NSLog(@"[Viatom] ✅ Final BP Result extracted: %d/%d mmHg, Pulse: %d", sys, dia, pulse);
         [self sendFinalBPResultOnce:@{
 
@@ -995,6 +1008,8 @@ if (n == 34 || n == 36 || n == 38 || n == 40 || n == 44) {
 
         @try {
             VTMBPRealTimeData rt = [VTMBLEParser parseBPRealTimeData:response];
+            NSLog(@"📊BPTRACE GetRealData fallback parse run_status=%d (n=%lu)",
+                  rt.run_status.status, (unsigned long)n);
             if (rt.run_status.status == VTMBPStatusBPMeasureEnd) {
                 [self sendEventWithName:@"onBPStatusChanged" body:@{@"status": @"measurement_completed"}];
                 [self.lastResultWaitTimer invalidate];
@@ -1008,6 +1023,7 @@ if (n == 34 || n == 36 || n == 38 || n == 40 || n == 44) {
         } @catch (NSException *e) {
             NSLog(@"[Viatom] Error parsing realtime data: %@", e);
         }
+        NSLog(@"📊BPTRACE GetRealData n=%lu fell through ALL result branches — NO result sent", (unsigned long)n);
         return;
     }
 
@@ -1109,6 +1125,8 @@ if (n == 34 || n == 36 || n == 38 || n == 40 || n == 44) {
 #pragma mark - Helpers
 
 - (void)exitBPMode {
+    NSLog(@"📊BPTRACE exitBPMode called (measuring=%d, lastResultSig=%@) — switching device to History mode",
+          self.isMeasurementInProgress, self.lastResultSig ?: @"(none)");
     if (self.isMeasurementInProgress) {
         [self.viatomUtils requestChangeBPState:2]; // to History; exits BP mode safely
         [self cleanupMeasurement:NO reason:@"mode_exit"];
@@ -1116,13 +1134,15 @@ if (n == 34 || n == 36 || n == 38 || n == 40 || n == 44) {
 }
 
 - (void)measurementTimeout {
-    [self handleMeasurementError:@"MEASUREMENT_TIMEOUT" 
+    NSLog(@"📊BPTRACE MEASUREMENT TIMEOUT (180s) — no result packet arrived");
+    [self handleMeasurementError:@"MEASUREMENT_TIMEOUT"
                          message:@"The measurement took too long. Please try again."];
 }
 
 - (void)forceExitAfterNoResult {
     self.lastResultWaitTimer = nil;
     if (self.isMeasurementInProgress) {
+        NSLog(@"📊BPTRACE forceExitAfterNoResult — MeasureEnd seen but NO result packet; starting retries");
         NSLog(@"[Viatom] Force exit - no result received after completion");
         
         // Try multiple attempts to get the result
@@ -1399,7 +1419,9 @@ RCT_EXPORT_METHOD(setVoiceEnabled:(BOOL)enabled) {
     };
     NSMutableArray *queue = [self loadOutbox];
     [queue addObject:record];
-    [self saveOutbox:queue];
+    BOOL wrote = [self saveOutbox:queue];
+    NSLog(@"📊BPTRACE outbox WRITE ok=%d id=%@ ts=%@ queueLen=%lu path=%@",
+          wrote, record[@"id"], record[@"timestamp"], (unsigned long)queue.count, [self outboxPath]);
     return record;
 }
 
@@ -1419,6 +1441,8 @@ RCT_EXPORT_METHOD(clearPendingResult:(NSString *)recordId) {
 }
 
 - (void)sendFinalBPResultOnce:(NSDictionary *)result {
+    NSLog(@"📊BPTRACE sendFinalBPResultOnce ENTER sys=%@ dia=%@ pulse=%@",
+          result[@"systolic"], result[@"diastolic"], result[@"pulse"]);
     // Content + time dedup: block only a duplicate PACKET of the SAME reading
     // within kResultDedupWindow. A genuinely new reading (different values, or the
     // same values >=~30s later) is never blocked — no dependence on start/end
@@ -1429,11 +1453,12 @@ RCT_EXPORT_METHOD(clearPendingResult:(NSString *)recordId) {
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
     if (self.lastResultSig && [self.lastResultSig isEqualToString:sig]
         && (now - self.lastResultAt) < kResultDedupWindow) {
-        NSLog(@"[Viatom] Duplicate BP result within %.0fs — skipping", kResultDedupWindow);
+        NSLog(@"📊BPTRACE result SKIPPED as duplicate (within %.0fs)", kResultDedupWindow);
         return;
     }
     self.lastResultSig = sig;
     self.lastResultAt = now;
+    NSLog(@"📊BPTRACE result ACCEPTED (new) — writing to outbox");
 
     // WRITE FIRST. Persist to the durable outbox before any JS notification or
     // UI update, so a crash immediately after cannot lose the reading.
