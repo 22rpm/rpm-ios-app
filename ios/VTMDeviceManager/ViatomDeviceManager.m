@@ -631,6 +631,11 @@ static BOOL vt_try_extract_result(NSData *blob,
             }
             // Auto-connect if enabled and not already connected
             if (self.autoReconnectEnabled && p.state == CBPeripheralStateDisconnected) {
+                // Arm the bounded window at the auto-connect site itself: this
+                // path also fires from app launch / Bluetooth-powered-on, not just
+                // beginReconnect, and an off cuff would otherwise loop unbounded.
+                // Guarded so it arms once per session, not on every 0.35s retry.
+                if (!self.reconnectInProgress) [self startReconnectWindow];
                 self.reconnectPendingPeripheral = p;
                 [self.centralManager connectPeripheral:p options:nil];
             }
@@ -689,6 +694,9 @@ static BOOL vt_try_extract_result(NSData *blob,
         self.lastConnectedId &&
         [peripheral.identifier isEqual:self.lastConnectedId] &&
         peripheral.state == CBPeripheralStateDisconnected) {
+        // Same as the retrieve path: bound this auto-connect regardless of what
+        // triggered the scan (arms once per session).
+        if (!self.reconnectInProgress) [self startReconnectWindow];
         self.reconnectPendingPeripheral = peripheral;
         [self.centralManager connectPeripheral:peripheral options:nil];
     }
