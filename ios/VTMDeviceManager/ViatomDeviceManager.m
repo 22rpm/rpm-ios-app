@@ -8,6 +8,11 @@
 
 static NSString * const kViatomCentralRestoreId = @"com.rpmapp.viatom.central.restore";
 static const NSTimeInterval kScanRestartDelay = 0.35;
+// Auto-reconnect is bounded to a wall-clock window so an off/unreachable cuff
+// can't spin the scan/connect loop forever (a connect to a powered-off device
+// never times out on its own). On expiry we stop, cancel the pending connect,
+// and surface the failure to JS exactly once.
+static const NSTimeInterval kReconnectWindow = 15.0;
 
 // Persist keys
 static NSString * const kSavedPeripheralUUIDKey = @"rpm.viatom.savedPeripheralUUID";
@@ -67,6 +72,13 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 
 @property (nonatomic, assign) BOOL hasSentFinalResult;
 
+// Bounded auto-reconnect (kReconnectWindow, cancellable). reconnectInProgress
+// gates the silent retry loop; the deadline timer owns the stop condition;
+// reconnectPendingPeripheral is the connect we may need to cancel on expiry.
+@property (nonatomic, strong) NSTimer *reconnectDeadlineTimer;
+@property (nonatomic, assign) BOOL reconnectInProgress;
+@property (nonatomic, strong) CBPeripheral *reconnectPendingPeripheral;
+
 
 @end
 
@@ -84,7 +96,8 @@ RCT_EXPORT_MODULE();
     @"onBPModeChanged",
     @"onBPConfigReceived",
     @"onBPStatusChanged",
-    @"onMeasurementResult"
+    @"onMeasurementResult",
+    @"onReconnectFailed"
   ];
 }
 
@@ -359,6 +372,47 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
+#pragma mark - Bounded auto-reconnect
+
+// Arm a fresh 15s window. Only meaningful while auto-reconnect is on and we are
+// not already connected. Re-arming (e.g. focus after a disconnect) restarts the
+// clock, which is what we want.
+- (void)startReconnectWindow {
+    if (!self.autoReconnectEnabled || self.connectedPeripheral) return;
+    self.reconnectInProgress = YES;
+    [self.reconnectDeadlineTimer invalidate];
+    self.reconnectDeadlineTimer =
+        [NSTimer scheduledTimerWithTimeInterval:kReconnectWindow
+                                         target:self
+                                       selector:@selector(reconnectWindowExpired)
+                                       userInfo:nil
+                                        repeats:NO];
+}
+
+// Tear down the window without touching the scan. cancelPending:NO is used on a
+// successful connect (the "pending" peripheral is the one that just connected —
+// cancelling it would drop the live connection).
+- (void)clearReconnectStateCancelPending:(BOOL)cancelPending {
+    [self.reconnectDeadlineTimer invalidate];
+    self.reconnectDeadlineTimer = nil;
+    self.reconnectInProgress = NO;
+    if (cancelPending && self.reconnectPendingPeripheral) {
+        [self.centralManager cancelPeripheralConnection:self.reconnectPendingPeripheral];
+    }
+    self.reconnectPendingPeripheral = nil;
+}
+
+// 15s elapsed with no connection: stop the loop, cancel the pending connect
+// (which would otherwise pend forever against a powered-off cuff), stop the
+// scan, and tell JS once so it can show a single clear "check the cuff" action.
+- (void)reconnectWindowExpired {
+    if (self.connectedPeripheral) { [self clearReconnectStateCancelPending:NO]; return; }
+    [self clearReconnectStateCancelPending:YES];
+    [self.centralManager stopScan];
+    [self sendEventWithName:@"onReconnectFailed"
+                       body:@{@"message": @"Couldn't connect to the cuff. Check that it's turned on."}];
+}
+
 - (void)persistVoiceEnabled:(BOOL)enabled {
     self.voiceEnabled = enabled;
     [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:kVoiceEnabledKey];
@@ -577,6 +631,12 @@ static BOOL vt_try_extract_result(NSData *blob,
             }
             // Auto-connect if enabled and not already connected
             if (self.autoReconnectEnabled && p.state == CBPeripheralStateDisconnected) {
+                // Arm the bounded window at the auto-connect site itself: this
+                // path also fires from app launch / Bluetooth-powered-on, not just
+                // beginReconnect, and an off cuff would otherwise loop unbounded.
+                // Guarded so it arms once per session, not on every 0.35s retry.
+                if (!self.reconnectInProgress) [self startReconnectWindow];
+                self.reconnectPendingPeripheral = p;
                 [self.centralManager connectPeripheral:p options:nil];
             }
         }
@@ -634,12 +694,19 @@ static BOOL vt_try_extract_result(NSData *blob,
         self.lastConnectedId &&
         [peripheral.identifier isEqual:self.lastConnectedId] &&
         peripheral.state == CBPeripheralStateDisconnected) {
+        // Same as the retrieve path: bound this auto-connect regardless of what
+        // triggered the scan (arms once per session).
+        if (!self.reconnectInProgress) [self startReconnectWindow];
+        self.reconnectPendingPeripheral = peripheral;
         [self.centralManager connectPeripheral:peripheral options:nil];
     }
 }
 
 - (void)centralManager:(CBCentralManager *)central didConnectPeripheral:(CBPeripheral *)peripheral {
     [self.centralManager stopScan];
+    // Connected — the reconnect window is done. Don't cancel the pending
+    // peripheral: it IS this now-live connection.
+    [self clearReconnectStateCancelPending:NO];
     self.connectedPeripheral = peripheral;
     [self persistLastConnectedId:peripheral.identifier];
 
@@ -663,6 +730,18 @@ static BOOL vt_try_extract_result(NSData *blob,
 }
 
 - (void)centralManager:(CBCentralManager *)central didFailToConnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
+    if (self.reconnectInProgress) {
+        // Bounded silent retry. Deliberately no handleDeviceError here: emitting
+        // onDeviceError every ~0.35s drove a setState storm in JS that froze the
+        // UI. The deadline timer (kReconnectWindow) is the sole stop condition;
+        // it surfaces the failure once via onReconnectFailed.
+        if (self.reconnectPendingPeripheral == peripheral) self.reconnectPendingPeripheral = nil;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kScanRestartDelay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (self.reconnectInProgress) [self beginScanNormal];
+        });
+        return;
+    }
+
     NSString *errorMsg = error.localizedDescription ?: @"Unknown error";
     [self handleDeviceError:VTMBLEPkgTypeCommonError command:0xFF context:[NSString stringWithFormat:@"Connect failed: %@", errorMsg]];
 
@@ -708,6 +787,12 @@ static BOOL vt_try_extract_result(NSData *blob,
     peripheral.delegate = nil;
 
     self.connectedPeripheral = nil;
+
+    // The cuff commonly auto-powers-off after a reading. Bound the reconnect so
+    // that if it stays off, we stop after kReconnectWindow instead of looping.
+    if (self.autoReconnectEnabled) {
+        [self startReconnectWindow];
+    }
 
     // Kick aggressive rescan
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kScanRestartDelay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -1202,6 +1287,23 @@ RCT_EXPORT_METHOD(enterHistoryMode) {
 // Runtime toggles from JS
 RCT_EXPORT_METHOD(enableAutoReconnect:(BOOL)enabled) {
     [self persistAutoReconnect:enabled];
+}
+
+// Start a bounded reconnect attempt (screen focus). Native owns the stop
+// condition, so JS no longer needs its own retry timer.
+RCT_EXPORT_METHOD(beginReconnect) {
+    if (self.connectedPeripheral) return;
+    [self startReconnectWindow];
+    if (self.centralManager.state == CBManagerStatePoweredOn) {
+        [self beginScanNormal];
+    }
+}
+
+// Cancel any in-flight reconnect (screen blur / leaving the screen), so the
+// scan/connect loop does not keep running in the background.
+RCT_EXPORT_METHOD(cancelReconnect) {
+    [self clearReconnectStateCancelPending:YES];
+    [self.centralManager stopScan];
 }
 
 RCT_EXPORT_METHOD(forgetSavedDevice) {
