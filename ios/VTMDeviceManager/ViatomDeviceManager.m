@@ -103,6 +103,18 @@ RCT_EXPORT_MODULE();
 
 + (BOOL)requiresMainQueueSetup { return YES; }
 
+// Run every exported method on the main queue — the SAME queue the
+// CBCentralManager was created with (see init). Without this, RCT dispatches
+// exported methods on a background queue, so every JS command (startScan,
+// connectToDevice, beginReconnect, ...) touched CoreBluetooth off its delegate
+// queue — a real crash vector — and the reconnect NSTimer was scheduled on a
+// background thread with no running run loop, so the 15s bound never fired on
+// the startScan/focus path. Pinning to main makes CB access, the timer, and the
+// reconnect-state fields (reconnectInProgress / reconnectPendingPeripheral) all
+// single-threaded on main. The exported methods are lightweight command
+// dispatches, so main-queue execution does not block the UI.
+- (dispatch_queue_t)methodQueue { return dispatch_get_main_queue(); }
+
 - (instancetype)init {
   if ((self = [super init])) {
     NSDictionary *opts = @{
