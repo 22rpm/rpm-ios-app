@@ -1,4 +1,12 @@
 // manager.js
+//
+// MAINTENANCE RULE: this is a hand-maintained WHITELIST wrapper over the native
+// ViatomDeviceManager module. Any RCT_EXPORT_METHOD added on the native side MUST
+// be added here too, or JS calls silently do nothing: `ViatomDeviceManager.foo?.()`
+// on a method the wrapper doesn't declare resolves to `undefined`, and the `?.`
+// swallows it with no error. Bare `.foo()` on a missing method throws instead.
+// Keep this list in sync with the native RCT_EXPORT_METHOD surface. (Audit:
+// `grep RCT_EXPORT_METHOD ViatomDeviceManager.m` vs the keys below.)
 import { NativeEventEmitter, NativeModules } from 'react-native';
 
 const { ViatomDeviceManager } = NativeModules;
@@ -38,6 +46,11 @@ export default {
   // Durable result outbox (readings persisted on-disk by native at parse time)
   getPendingResults: () => ViatomDeviceManager.getPendingResults(),
   clearPendingResult: (id) => ViatomDeviceManager.clearPendingResult(id),
+
+  // Exposed for completeness so the wrapper matches the native surface (not yet
+  // called from JS, but present so a future caller doesn't hit a silent no-op).
+  forgetSavedDevice: () => ViatomDeviceManager.forgetSavedDevice(),
+  setVoiceEnabled: (enabled) => ViatomDeviceManager.setVoiceEnabled(enabled),
 
   // Event Listeners
   addListener: (eventName, callback) => eventEmitter.addListener(eventName, callback),
