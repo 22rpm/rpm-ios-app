@@ -39,7 +39,8 @@ const getMarkerLeftPercent = systolic => {
 };
 
 // API Configuration
-const API_BASE_URL = 'https://rmtrpm.duckdns.org/rpm-be/api/dev-data';
+const API_BASE_URL = 'http://192.168.1.15:4000/api/dev-data';
+// const API_BASE_URL = 'https://rmtrpm.duckdns.org/rpm-be/api/dev-data';
 const DEV_TYPE = 'bp';
 
 // Configure axios to include credentials
@@ -788,10 +789,12 @@ const disconnectionSubscription = ViatomDeviceManager.addListener('onDeviceDisco
   // Force UI update
   setConnectedDevice(null);
 
-  // Q4: the cuff disconnects after each reading — try to reconnect SILENTLY
-  // (native retrieve+reconnect via the scan), no modal/toast churn.
+  // Q4: the cuff commonly powers off after a reading. The NATIVE manager now
+  // owns the bounded reconnect (didDisconnect arms a 15s window and stops on
+  // its own), so JS just shows the banner. No JS-side respin here — that was
+  // the latent unbounded loop: setTimeout(safeStartScan) with no stop condition
+  // spun the same way as the tap-with-cuff-off case if the cuff stayed off.
   setReconnecting(true);
-  setTimeout(() => safeStartScan(), 600);
 });
 
     const dataSubscription = ViatomDeviceManager.addListener('onRealTimeData', (data) => {
@@ -931,6 +934,21 @@ const resultSubscription = ViatomDeviceManager.addListener('onMeasurementResult'
       showToastMessage(userMessage, 4000);
     });
 
+    // Q4: native emits this ONCE when the bounded 15s reconnect window expires
+    // without connecting. Silent-forever is the failure mode that costs
+    // transmission days, so the patient gets one clear message + the manual
+    // picker as the single next action.
+    const reconnectFailedSubscription = ViatomDeviceManager.addListener('onReconnectFailed', (payload) => {
+      console.log('[BP] Reconnect failed (window expired):', payload);
+      setReconnecting(false);
+      setConnectionVerified(true);
+      showToastMessage(
+        payload?.message || "Couldn't connect to the cuff. Check that it's turned on.",
+        6000
+      );
+      setShowDeviceModal(true);
+    });
+
     return () => {
       discoverySubscription.remove();
       connectionSubscription.remove();
@@ -939,6 +957,7 @@ const resultSubscription = ViatomDeviceManager.addListener('onMeasurementResult'
       resultSubscription.remove();
       statusSubscription.remove();
       errorSubscription.remove();
+      reconnectFailedSubscription.remove();
 
       if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     };
@@ -953,12 +972,13 @@ useFocusEffect(
   useCallback(() => {
     console.log('[BP] Screen focused, checking connection state');
 
-    // Q4/Q2: clean auto-reconnect. The native manager persists the last device
-    // UUID and reconnects to it (retrievePeripherals + connect) as part of the
-    // scan, so on focus we start that quietly — NO device modal, NO toast, and no
-    // resetting of an existing connection. The patient just sees "Reconnecting…".
-    // Only if it doesn't connect within the window do we fall back to the manual
-    // picker — the modal is now a fallback, not the default.
+    // Q4/Q2: clean auto-reconnect, now owned by the NATIVE manager. beginReconnect
+    // arms a bounded 15s window and scans; the native side reconnects to the saved
+    // UUID quietly — NO modal, NO toast, no resetting an existing connection. The
+    // patient just sees "Reconnecting…". If the cuff doesn't connect within the
+    // window, native stops on its own and emits onReconnectFailed (handled in the
+    // listener above), which surfaces one clear message + the manual picker. No JS
+    // retry timer here — that timer's stopScan was overridden by the native loop.
     ViatomDeviceManager.enableAutoReconnect?.(true);
 
     if (connectedDevice) {
@@ -967,24 +987,18 @@ useFocusEffect(
       return undefined;
     }
 
-    console.log('[BP] Not connected — attempting silent auto-reconnect');
+    console.log('[BP] Not connected — starting bounded auto-reconnect');
     setReconnecting(true);
-    safeStartScan();
+    ViatomDeviceManager.beginReconnect?.();
 
-    // Single fallback: if nothing connects in 10s, stop scanning and open the
-    // manual picker ONCE. (No 3s auto-modal, no toast spam.)
-    const fallbackTimer = setTimeout(() => {
-      if (!connectedDeviceRef.current) {
-        console.log('[BP] Auto-reconnect timed out — manual picker');
-        ViatomDeviceManager.stopScan?.();
-        setReconnecting(false);
-        setConnectionVerified(true);
-        setShowDeviceModal(true);
-      }
-    }, 10000);
-
-    return () => clearTimeout(fallbackTimer);
-  }, [connectedDevice, safeStartScan])
+    // Leaving the screen must STOP the native scan/connect loop, not just hide it.
+    // (cancelReconnect — not enableAutoReconnect(false), which persists to
+    // NSUserDefaults and would disable the feature permanently.)
+    return () => {
+      ViatomDeviceManager.cancelReconnect?.();
+      setReconnecting(false);
+    };
+  }, [connectedDevice])
 );
 
 
