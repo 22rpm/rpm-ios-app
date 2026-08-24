@@ -54,3 +54,53 @@ until `5ee272a`. The maintenance rule is now a header comment in the wrapper.
 Consider a stronger guard: a dev-time assertion that every native method name is
 present in the wrapper, or auto-exposing `NativeModules.ViatomDeviceManager`
 methods that aren't explicitly overridden.
+
+## 5. Background delivery — URLSession background transfer (extension of the outbox)
+
+Today: durable capture in the background (native writes the reading to the outbox
+even while backgrounded), but DELIVERY is foreground `axios` — it drains on the
+next app open. This section is what it takes to deliver "from the pocket" without
+the patient opening the app. NOT built.
+
+**What it is.** A `URLSession` created with
+`backgroundSessionConfigurationWithIdentifier:`. You hand it a FILE-backed upload
+task; the OS daemon (`nsurlsessiond`) runs the transfer out-of-process and
+relaunches the app in the background (`handleEventsForBackgroundURLSession`) to
+deliver the result. Completes even after the app is suspended or terminated.
+
+**Scope.**
+- Delivery moves from JS/axios to NATIVE. Native builds each request (URL,
+  body-as-file, auth) and enqueues one upload task per outbox row; the JS drain
+  becomes the foreground fallback (or is removed).
+- Body-as-file: background uploads must be file-based, so each outbox record is
+  written as a request-body file.
+- Auth rides `NSHTTPCookieStorage` (a background session can use the shared cookie
+  jar), so the session cookie carries — but a background 401 must REQUEUE, not
+  delete (the existing "delete only on confirmed success" already enforces this).
+- AppDelegate wiring: retain the completion handler, map tasks->rows across
+  relaunch, clear on 201 / requeue on failure via the URLSession delegates.
+
+**Risk.**
+- Delegate lifecycle is finicky (relaunch handling, completion-handler retention,
+  task->row mapping across a cold start); higher bug surface than the JS drain,
+  and hard to test (real device, force-quit, network toggling -> slow iteration).
+- iOS schedules background transfers DISCRETIONARILY (batched for power/radio), so
+  it is "delivers within minutes to tens of minutes," not instant. Fine for RPM.
+- Token expiry while queued -> background 401 -> requeue; background token refresh
+  is itself constrained, so a long-queued row still lands on the next foreground.
+- Duplicate delivery from retry/relaunch -> covered by server idempotency (keyed
+  on the baked `data.timestamp`). This is why it composes.
+
+**Independent or extension?** An EXTENSION of the outbox, not independent. The
+outbox already provides the three hard parts — durable on-disk capture, a baked
+per-reading timestamp that makes retries idempotent, and delete-only-on-success.
+Background transfer swaps the TRANSPORT of the drain leg while reusing all of it.
+Without the outbox you would build those first; with it, this is "change how/when
+rows drain," not what is stored or the success semantics.
+
+**Value / price.** Moves from "durable capture, delivery on next app open" (the
+patient must remember to open the app) to "durable capture, delivery on iOS's
+background schedule" (they do not). For an elderly population that is the whole
+difference. Price: a native background-networking module + AppDelegate lifecycle
+wiring + slower testing — bounded because persistence/idempotency/success-gating
+already exist.
