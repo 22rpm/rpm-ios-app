@@ -1434,7 +1434,9 @@ RCT_EXPORT_METHOD(setVoiceEnabled:(BOOL)enabled) {
 
 RCT_EXPORT_METHOD(getPendingResults:(RCTPromiseResolveBlock)resolve
                           rejecter:(RCTPromiseRejectBlock)reject) {
-    resolve([self loadOutbox]);
+    NSArray *q = [self loadOutbox];
+    NSLog(@"📊BPTRACE getPendingResults returning %lu row(s)", (unsigned long)q.count);
+    resolve(q);
 }
 
 RCT_EXPORT_METHOD(clearPendingResult:(NSString *)recordId) {
@@ -1444,6 +1446,8 @@ RCT_EXPORT_METHOD(clearPendingResult:(NSString *)recordId) {
     [queue filterUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *b) {
         return ![[obj objectForKey:@"id"] isEqual:recordId];
     }]];
+    NSLog(@"📊BPTRACE clearPendingResult id=%@ removed=%lu (before=%lu after=%lu)",
+          recordId, (unsigned long)(before - queue.count), (unsigned long)before, (unsigned long)queue.count);
     if (queue.count != before) [self saveOutbox:queue];
 }
 
