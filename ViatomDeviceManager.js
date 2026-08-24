@@ -11,6 +11,13 @@ export default {
   connectToDevice: (deviceId) => ViatomDeviceManager.connectToDevice(deviceId),
   disconnectDevice: () => ViatomDeviceManager.disconnectDevice(),
 
+  // Auto-reconnect (bounded 15s window owned by native). These were called from
+  // BloodPressure.js but never exposed here, so every call was a silent no-op —
+  // focus-reconnect and blur-cancel did nothing.
+  enableAutoReconnect: (enabled) => ViatomDeviceManager.enableAutoReconnect(enabled),
+  beginReconnect: () => ViatomDeviceManager.beginReconnect(),
+  cancelReconnect: () => ViatomDeviceManager.cancelReconnect(),
+
   // Blood Pressure Methods
   // startBPMeasurement: () => ViatomDeviceManager.startBPMeasurement(),
   // stopBPMeasurement: () => ViatomDeviceManager.stopBPMeasurement(),
