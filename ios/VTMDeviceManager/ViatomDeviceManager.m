@@ -917,18 +917,13 @@ commandCompletion:(u_char)cmdType
                 @"timestamp": @((long long)([NSDate date].timeIntervalSince1970 * 1000))
             }];
 
-            if (defl && mmHg < 10.0 && self.isWaitingForBPResult) {
-                self.lowPressureStreak++;
-                if (self.lowPressureStreak >= 3) {
-                    [self sendEventWithName:@"onBPStatusChanged" body:@{@"status": @"measurement_completed"}];
-                    self.isWaitingForBPResult = NO;
-                    [self.measurementTimeoutTimer invalidate];
-                    self.measurementTimeoutTimer = nil;
-                    [self exitBPMode];
-                }
-            } else { 
-                self.lowPressureStreak = 0; 
-            }
+            // REMOVED (Finding 2): the low-pressure heuristic used to complete the
+            // measurement and switch the cuff to History mode (exitBPMode) once the
+            // cuff deflated below 10 mmHg for 3 packets. At 8 Hz that is ~0.36s, so a
+            // brief low-pressure dip pre-empted the device's own result packet and
+            // MeasureEnd status — cutting the measurement short ("just stopped").
+            // We now complete ONLY on VTMBPStatusBPMeasureEnd + the measurement
+            // timeout, and never leave BP mode before the result is captured.
             return;
         }
 
@@ -968,18 +963,9 @@ commandCompletion:(u_char)cmdType
                   @"hasPulse": @(hasPulse), @"pulseRate": @(pr),
                   @"timestamp": @((long long)([NSDate date].timeIntervalSince1970 * 1000))
                 }];
-                if (defl && mmHg < 10.0 && self.isWaitingForBPResult) {
-                  self.lowPressureStreak++;
-                  if (self.lowPressureStreak >= 3) {
-                    [self sendEventWithName:@"onBPStatusChanged" body:@{@"status": @"measurement_completed"}];
-                    self.isWaitingForBPResult = NO;
-                    [self.measurementTimeoutTimer invalidate];
-                    self.measurementTimeoutTimer = nil;
-                    [self exitBPMode];
-                  }
-                } else { 
-                    self.lowPressureStreak = 0; 
-                }
+                // REMOVED (Finding 2): same low-pressure heuristic as the n==21
+                // path. Completion now comes only from VTMBPStatusBPMeasureEnd +
+                // timeout; never leave BP mode before the result is captured.
                 return;
             }
         }
