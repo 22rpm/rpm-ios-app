@@ -26,6 +26,8 @@ import Svg, {
 import globalStyles from './globalStyles';
 import ViatomDeviceManager from './ViatomDeviceManager';
 import axios from 'axios';
+import { drainOutbox } from './outbox';
+import { DEV_DATA_BASE } from './apiConfig';
 
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
 
@@ -39,8 +41,8 @@ const getMarkerLeftPercent = systolic => {
 };
 
 // API Configuration
-const API_BASE_URL = 'http://192.168.1.15:4000/api/dev-data';
-// const API_BASE_URL = 'https://rmtrpm.duckdns.org/rpm-be/api/dev-data';
+// Base is centralized in apiConfig.js (single flip point for prod vs LAN).
+const API_BASE_URL = DEV_DATA_BASE;
 const DEV_TYPE = 'bp';
 
 // Configure axios to include credentials
@@ -820,48 +822,34 @@ const resultSubscription = ViatomDeviceManager.addListener('onMeasurementResult'
   setProcessedResults(prev => new Set([...prev, resultKey]));
 
   resetMeasurementState();
-  const now = new Date();
-  const currentDevice = connectedDeviceRef.current;
-  
-  const newReading = {
-    id: Date.now(),
-    date: now.toLocaleDateString(),
-    time: now.toLocaleTimeString(),
-    systolic: Number(evt.systolic),
-    diastolic: Number(evt.diastolic),
-    bpm: Number(evt.pulse),
-    mean: Number(evt.meanPressure),
-    timestamp: now.toISOString(),
-    deviceName: currentDevice?.name,
-    deviceId: currentDevice?.id
-  };
-  
-  console.log('📝 Final reading from onMeasurementResult:', newReading);
-  
-  storeMeasurementData(newReading)
-    .then(() => {
-      console.log('✅ Device data stored from onMeasurementResult');
-      setRealTimeData({
-        type: 'BP',
-        systolic: newReading.systolic,
-        diastolic: newReading.diastolic,
-        pulse: newReading.bpm,
-        mean: newReading.mean,
-        phase: 'done',
-      });
-      
-      showToastMessage(
-        `Measurement Complete: ${newReading.systolic}/${newReading.diastolic} mmHg, Pulse: ${newReading.bpm} BPM`,
-        3000
-      );
+
+  // The reading was already written to the durable outbox by native, BEFORE this
+  // event fired (write-first). This handler is best-effort: show the result from
+  // the event payload, then trigger a delivery drain. If the POST fails, the row
+  // stays queued and a later drain (screen focus / app start) delivers it. The
+  // outbox is the SINGLE write path now — do not add a direct POST here, or the
+  // two paths would use different timestamps and defeat server-side dedup.
+  const sys = Number(evt.systolic);
+  const dia = Number(evt.diastolic);
+  const pulse = Number(evt.pulse);
+  const mean = Number(evt.meanPressure);
+
+  setRealTimeData({ type: 'BP', systolic: sys, diastolic: dia, pulse, mean, phase: 'done' });
+  showToastMessage(
+    `Measurement Complete: ${sys}/${dia} mmHg, Pulse: ${pulse} BPM`,
+    3000
+  );
+
+  drainOutbox()
+    .then(({ sent }) => {
+      if (sent > 0) {
+        console.log(`✅ Outbox delivered ${sent} reading(s)`);
+        loadHistoricalData(filterDays);
+      }
     })
-    .catch(error => {
-      console.error('❌ Failed to store device data from onMeasurementResult:', error);
-    })
+    .catch(err => console.warn('Outbox drain error:', err?.message))
     .finally(() => {
-      setTimeout(() => {
-        processingRef.current = false;
-      }, 2000);
+      setTimeout(() => { processingRef.current = false; }, 2000);
     });
 });
 
@@ -971,6 +959,10 @@ const resultSubscription = ViatomDeviceManager.addListener('onMeasurementResult'
 useFocusEffect(
   useCallback(() => {
     console.log('[BP] Screen focused, checking connection state');
+
+    // Deliver anything left in the durable outbox from a previous session (e.g.
+    // a reading taken while offline, or one whose delivery was interrupted).
+    drainOutbox().catch(() => {});
 
     // Q4/Q2: clean auto-reconnect, now owned by the NATIVE manager. beginReconnect
     // arms a bounded 15s window and scans; the native side reconnects to the saved

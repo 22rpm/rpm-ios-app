@@ -19,6 +19,7 @@ import Profile from './Profile';
 import PrivacySecurity from './PrivacySecurityScreen';
 import AboutApp from './AboutAppScreen';
 import Oxygen from './Oxygen';
+import { drainOutbox } from './outbox';
 
 const API_BASE = 'https://rmtrpm.duckdns.org/rpm-be';
 
@@ -152,6 +153,11 @@ export default function App() {
   useEffect(() => {
     isMounted.current = true;
     checkAndScheduleRefresh();
+
+    // Deliver any readings that survived a crash/relaunch in the durable outbox.
+    // If not yet authenticated the POSTs 401 and the rows stay queued for a later
+    // drain (BloodPressure focus), so this is safe to fire unconditionally.
+    drainOutbox().catch(() => {});
 
     return () => {
       isMounted.current = false;

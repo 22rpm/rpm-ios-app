@@ -1326,6 +1326,85 @@ RCT_EXPORT_METHOD(setVoiceEnabled:(BOOL)enabled) {
     [self persistVoiceEnabled:enabled];
 }
 
+#pragma mark - Durable result outbox
+
+// A BP reading is written to an on-disk queue the INSTANT it is parsed, before
+// any JS notification or UI update. If the process dies one millisecond later,
+// the reading survives; everything downstream (the JS event, the POST) is
+// best-effort. The queue is drained by JS, which deletes a row ONLY on an HTTP
+// 200 — server idempotency (keyed on user_id + dev_type + data.timestamp) makes
+// retries safe, so the timestamp is baked here, ONCE, and every POST attempt
+// (immediate or retried) reuses it. This is the single write path for a reading.
+
+- (NSString *)outboxPath {
+    NSString *dir = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    return [dir stringByAppendingPathComponent:@"bp_outbox.json"];
+}
+
+- (NSMutableArray *)loadOutbox {
+    NSData *data = [NSData dataWithContentsOfFile:[self outboxPath]];
+    if (!data) return [NSMutableArray array];
+    id arr = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return [arr isKindOfClass:[NSArray class]] ? [arr mutableCopy] : [NSMutableArray array];
+}
+
+// Atomic write (temp file + rename) so a crash mid-write can't corrupt or lose
+// the queue: either the old file or the fully-written new file survives.
+- (BOOL)saveOutbox:(NSArray *)arr {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:arr options:0 error:nil];
+    if (!data) return NO;
+    return [data writeToFile:[self outboxPath] atomically:YES];
+}
+
+- (NSString *)iso8601Now {
+    static NSDateFormatter *fmt = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        fmt = [[NSDateFormatter alloc] init];
+        fmt.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'";
+        fmt.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
+        fmt.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    });
+    return [fmt stringFromDate:[NSDate date]];
+}
+
+// Persist one reading. Returns the baked record (incl. its id + ISO timestamp)
+// so the caller can hand the same values to JS for the immediate drain attempt.
+- (NSDictionary *)enqueueOutboxResultFrom:(NSDictionary *)result {
+    NSDictionary *record = @{
+        @"id": [[NSUUID UUID] UUIDString],
+        @"enqueuedAt": @((long long)([NSDate date].timeIntervalSince1970 * 1000)),
+        @"timestamp": [self iso8601Now],           // baked ONCE — dedup key
+        @"systolic": result[@"systolic"] ?: @0,
+        @"diastolic": result[@"diastolic"] ?: @0,
+        @"pulse": result[@"pulse"] ?: @0,
+        @"mean": result[@"meanPressure"] ?: @0,
+        // Bind the device id at measurement time (the real UUID), rather than
+        // letting JS fall back to a shared literal at store time.
+        @"devId": self.connectedPeripheral.identifier.UUIDString ?: @"",
+        @"devName": self.connectedPeripheral.name ?: @"",
+    };
+    NSMutableArray *queue = [self loadOutbox];
+    [queue addObject:record];
+    [self saveOutbox:queue];
+    return record;
+}
+
+RCT_EXPORT_METHOD(getPendingResults:(RCTPromiseResolveBlock)resolve
+                          rejecter:(RCTPromiseRejectBlock)reject) {
+    resolve([self loadOutbox]);
+}
+
+RCT_EXPORT_METHOD(clearPendingResult:(NSString *)recordId) {
+    if (recordId.length == 0) return;
+    NSMutableArray *queue = [self loadOutbox];
+    NSUInteger before = queue.count;
+    [queue filterUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *b) {
+        return ![[obj objectForKey:@"id"] isEqual:recordId];
+    }]];
+    if (queue.count != before) [self saveOutbox:queue];
+}
+
 - (void)sendFinalBPResultOnce:(NSDictionary *)result {
     if (self.hasSentFinalResult) {
         NSLog(@"[Viatom] ⚠️ Duplicate BP result blocked");
@@ -1334,7 +1413,16 @@ RCT_EXPORT_METHOD(setVoiceEnabled:(BOOL)enabled) {
 
     self.hasSentFinalResult = YES;
 
-    [self sendEventWithName:@"onMeasurementResult" body:result];
+    // WRITE FIRST. Persist to the durable outbox before any JS notification or
+    // UI update, so a crash immediately after cannot lose the reading.
+    NSDictionary *record = [self enqueueOutboxResultFrom:result];
+
+    // Best-effort UI notification. Carry the outbox id + baked timestamp so JS
+    // can drain immediately and clear the exact row on success.
+    NSMutableDictionary *payload = [result mutableCopy];
+    payload[@"outboxId"] = record[@"id"];
+    payload[@"capturedAt"] = record[@"timestamp"];
+    [self sendEventWithName:@"onMeasurementResult" body:payload];
 
     // stop timers
     self.isWaitingForBPResult = NO;

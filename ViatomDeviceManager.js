@@ -35,6 +35,10 @@ export default {
   enterECGMode: () => ViatomDeviceManager.enterECGMode(),
   enterHistoryMode: () => ViatomDeviceManager.enterHistoryMode(),
 
+  // Durable result outbox (readings persisted on-disk by native at parse time)
+  getPendingResults: () => ViatomDeviceManager.getPendingResults(),
+  clearPendingResult: (id) => ViatomDeviceManager.clearPendingResult(id),
+
   // Event Listeners
   addListener: (eventName, callback) => eventEmitter.addListener(eventName, callback),
   removeAllListeners: (eventName) => eventEmitter.removeAllListeners(eventName),
