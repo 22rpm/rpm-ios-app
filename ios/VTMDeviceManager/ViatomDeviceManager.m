@@ -850,6 +850,11 @@ static BOOL vt_try_extract_result(NSData *blob,
 
 - (void)util:(VTMURATUtils *)util
 commandSendFailed:(u_char)errorCode {
+    // errorCode per SDK: 0=peripheral nil, 1=tx characteristic nil,
+    // 2=not connected, 3=TIMEOUT. A timeout here during a measurement is the
+    // signature of command-queue contention preempting the result response.
+    NSLog(@"📊BPTRACE commandSendFailed errorCode=%d (3=TIMEOUT) waitingForResult=%d measuring=%d",
+          errorCode, self.isWaitingForBPResult, self.isMeasurementInProgress);
     NSLog(@"[Viatom] Command send failed with code: %d", errorCode);
     [self handleDeviceError:VTMBLEPkgTypeCommonError command:0xFF context:@"Command send failed"];
 }
@@ -859,6 +864,8 @@ commandFailed:(u_char)cmdType
  deviceType:(VTMDeviceType)deviceType
  failedType:(VTMBLEPkgType)type {
     
+    NSLog(@"📊BPTRACE commandFailed cmd=0x%02X failedType=%d waitingForResult=%d measuring=%d",
+          cmdType, type, self.isWaitingForBPResult, self.isMeasurementInProgress);
     NSLog(@"[Viatom] Command 0x%02X failed with error: %d", cmdType, type);
     [self handleDeviceError:type command:cmdType context:@"Command execution failed"];
 }
