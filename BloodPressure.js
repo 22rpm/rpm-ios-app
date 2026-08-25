@@ -979,8 +979,16 @@ useFocusEffect(
     // retry timer here — that timer's stopScan was overridden by the native loop.
     ViatomDeviceManager.enableAutoReconnect?.(true);
 
-    if (connectedDevice) {
-      console.log('[BP] Already connected:', connectedDevice.name);
+    // Use the REF, not the connectedDevice state, and depend on nothing — so this
+    // effect (and its cancelReconnect cleanup) runs only on real focus/blur, never
+    // on a connect/disconnect transition. Previously the [connectedDevice] dep made
+    // a mid-session disconnect (setConnectedDevice(null)) fire the cleanup ->
+    // cancelReconnect, which tore down the window didDisconnect had just armed and
+    // dropped didFailToConnect into the unbounded generic-error branch — the Test B
+    // lockout. A mid-session disconnect is now owned entirely by native didDisconnect
+    // (which arms the bounded window); JS must not cancel it.
+    if (connectedDeviceRef.current) {
+      console.log('[BP] Already connected:', connectedDeviceRef.current.name);
       setConnectionVerified(true);
       return undefined;
     }
@@ -989,14 +997,13 @@ useFocusEffect(
     setReconnecting(true);
     ViatomDeviceManager.beginReconnect?.();
 
-    // Leaving the screen must STOP the native scan/connect loop, not just hide it.
-    // (cancelReconnect — not enableAutoReconnect(false), which persists to
-    // NSUserDefaults and would disable the feature permanently.)
+    // Leaving the SCREEN must stop the native loop. This cleanup now fires only on
+    // blur/unmount (empty deps), not on a disconnect.
     return () => {
       ViatomDeviceManager.cancelReconnect?.();
       setReconnecting(false);
     };
-  }, [connectedDevice])
+  }, [])
 );
 
 
