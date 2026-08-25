@@ -69,6 +69,7 @@ export async function drainOutbox() {
     console.log(`[outbox] draining ${pending.length} queued reading(s)`);
     for (const rec of pending) {
       try {
+        console.log(`📊BPTRACE POST ${rec.systolic}/${rec.diastolic} pulse=${rec.pulse} id=${rec.id} ts=${rec.timestamp}`);
         const res = await axios.post(`${DEV_DATA_BASE}/devices/data`, buildBody(rec), {
           withCredentials: true,
           headers: { 'Content-Type': 'application/json' },

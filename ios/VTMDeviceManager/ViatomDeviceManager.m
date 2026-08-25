@@ -1428,8 +1428,9 @@ RCT_EXPORT_METHOD(setVoiceEnabled:(BOOL)enabled) {
     NSMutableArray *queue = [self loadOutbox];
     [queue addObject:record];
     BOOL wrote = [self saveOutbox:queue];
-    NSLog(@"📊BPTRACE outbox WRITE ok=%d id=%@ ts=%@ queueLen=%lu path=%@",
-          wrote, record[@"id"], record[@"timestamp"], (unsigned long)queue.count, [self outboxPath]);
+    NSLog(@"📊BPTRACE outbox WRITE ok=%d sys=%@ dia=%@ pulse=%@ id=%@ ts=%@ queueLen=%lu",
+          wrote, record[@"systolic"], record[@"diastolic"], record[@"pulse"],
+          record[@"id"], record[@"timestamp"], (unsigned long)queue.count);
     return record;
 }
 
