@@ -887,6 +887,57 @@ commandCompletion:(u_char)cmdType
         NSLog(@"📊BPTRACE GetRealData n=%lu waitingForResult=%d measuring=%d",
               (unsigned long)n, self.isWaitingForBPResult, self.isMeasurementInProgress);
 
+        // Length-INDEPENDENT result extraction. The old hardcoded length gate
+        // {20,34,36,38,40,44} broke when the poll rate changed the device's
+        // framing (result frames became 60-74 bytes). The result lives in the SDK
+        // VTMBPEndMeasureData struct (parseBPRealTimeData carries only run_status +
+        // waveform, NOT sys/dia), so parse that at its correct offset; fall back to
+        // a plausibility-checked scan for a batched/offset frame. Gated on
+        // isWaitingForBPResult (only during a measurement) and strict plausibility
+        // (dia<=mean<=sys), so a progress frame can't be taken for a result.
+        if (self.isWaitingForBPResult && n >= 20) {
+            uint16_t rSys = 0, rDia = 0, rMean = 0, rPulse = 0;
+            u_char rState = 0, rMedical = 0;
+            BOOL gotResult = NO;
+            @try {
+                VTMBPEndMeasureData end = [VTMBLEParser parseBPEndMeasureData:response];
+                if (vt_plausible_result_values(end.systolic_pressure, end.diastolic_pressure,
+                                                end.mean_pressure, end.pulse_rate)) {
+                    rSys = end.systolic_pressure; rDia = end.diastolic_pressure;
+                    rMean = end.mean_pressure;    rPulse = end.pulse_rate;
+                    rState = end.state_code;      rMedical = end.medical_result;
+                    gotResult = YES;
+                }
+            } @catch (NSException *e) {
+                NSLog(@"[Viatom] parseBPEndMeasureData exception: %@", e);
+            }
+            // Scan fallback only on larger frames (>=34, the historical result-frame
+            // floor). This keeps the sliding scan away from the smaller progress
+            // frames (n==21/32) where a coincidental plausible tuple is the main
+            // false-positive risk; parseBPEndMeasureData above already covers the
+            // offset-0 case for all sizes.
+            if (!gotResult && n >= 34) {
+                gotResult = vt_try_extract_result(response, &rSys, &rDia, &rMean, &rPulse);
+            }
+            if (gotResult) {
+                NSLog(@"📊BPTRACE RESULT extracted (SDK/scan) sys=%u dia=%u mean=%u pulse=%u n=%lu",
+                      rSys, rDia, rMean, rPulse, (unsigned long)n);
+                [self sendFinalBPResultOnce:@{
+                    @"type": @"BP_RESULT",
+                    @"systolic": @(rSys), @"diastolic": @(rDia),
+                    @"meanPressure": @(rMean), @"pulse": @(rPulse),
+                    @"stateCode": @(rState),
+                    @"medicalResult": @(rMedical),
+                    @"timestamp": @((long long)([NSDate date].timeIntervalSince1970 * 1000))
+                }];
+                self.isWaitingForBPResult = NO;
+                [self.measurementTimeoutTimer invalidate];
+                self.measurementTimeoutTimer = nil;
+                [self exitBPMode];
+                return;
+            }
+        }
+
         if (n == 2) {
             const double mmHg = vt_normalize_pressure(vt_s16le(p));
             [self sendEventWithName:@"onRealTimeData" body:@{
@@ -927,31 +978,8 @@ commandCompletion:(u_char)cmdType
             return;
         }
 
-        if (n == 20) {
-            uint16_t sys = vt_u16le(p + 3);
-            uint16_t dia = vt_u16le(p + 5);
-            uint16_t mean = vt_u16le(p + 7);
-            uint16_t pulse = vt_u16le(p + 9);
-            BOOL plausible20 = vt_plausible_result_values(sys, dia, mean, pulse);
-            NSLog(@"📊BPTRACE n==20 RESULT-candidate sys=%u dia=%u mean=%u pulse=%u plausible=%d",
-                  sys, dia, mean, pulse, plausible20);
-            if (plausible20) {
-                [self sendFinalBPResultOnce:@{
-
-                  @"type": @"BP_RESULT",
-                  @"systolic": @(sys), @"diastolic": @(dia),
-                  @"meanPressure": @(mean), @"pulse": @(pulse),
-                  @"stateCode": @((u_char)p[11]),
-                  @"medicalResult": @((u_char)p[12]),
-                  @"timestamp": @((long long)([NSDate date].timeIntervalSince1970 * 1000))
-                }];
-                self.isWaitingForBPResult = NO;
-                [self.measurementTimeoutTimer invalidate];
-                self.measurementTimeoutTimer = nil;
-                [self exitBPMode];
-                return;
-            }
-        }
+        // (n==20 hardcoded-offset result block removed — superseded by the
+        // length-independent SDK/scan extraction above.)
 
         if (n == 32) {
             double mmHg = 0.0; BOOL defl = NO; BOOL hasPulse = NO; int pr = 0;
@@ -970,34 +998,8 @@ commandCompletion:(u_char)cmdType
             }
         }
 
-if (n == 34 || n == 36 || n == 38 || n == 40 || n == 44) {
-    uint16_t sys=0,dia=0,mean=0,pulse=0;
-    BOOL extracted = vt_try_extract_result(response, &sys, &dia, &mean, &pulse);
-    NSLog(@"📊BPTRACE n==%lu RESULT-candidate extracted=%d sys=%u dia=%u mean=%u pulse=%u",
-          (unsigned long)n, extracted, sys, dia, pulse);
-    if (extracted) {
-        NSLog(@"[Viatom] ✅ Final BP Result extracted: %d/%d mmHg, Pulse: %d", sys, dia, pulse);
-        [self sendFinalBPResultOnce:@{
-
-          @"type": @"BP_RESULT",
-          @"systolic": @(sys), @"diastolic": @(dia),
-          @"meanPressure": @(mean), @"pulse": @(pulse),
-          @"timestamp": @((long long)([NSDate date].timeIntervalSince1970 * 1000))
-        }];
-        
-        self.isWaitingForBPResult = NO;
-        [self.measurementTimeoutTimer invalidate];
-        self.measurementTimeoutTimer = nil;
-        
-        // Speak success
-        [self speak:[NSString stringWithFormat:@"Measurement complete. Blood pressure %d over %d. Pulse %d.", sys, dia, pulse]];
-        
-        [self exitBPMode];
-        return;
-    } else {
-        NSLog(@"[Viatom] ❌ Could not extract valid result from %lu bytes", (unsigned long)n);
-    }
-}
+        // (n==34/36/38/40/44 length-gated result block removed — superseded by the
+        // length-independent SDK/scan extraction at the top of this handler.)
 
         @try {
             VTMBPRealTimeData rt = [VTMBLEParser parseBPRealTimeData:response];
