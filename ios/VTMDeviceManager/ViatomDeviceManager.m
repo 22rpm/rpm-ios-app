@@ -405,7 +405,12 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
 // not already connected. Re-arming (e.g. focus after a disconnect) restarts the
 // clock, which is what we want.
 - (void)startReconnectWindow {
-    if (!self.autoReconnectEnabled || self.connectedPeripheral) return;
+    if (!self.autoReconnectEnabled || self.connectedPeripheral) {
+        NSLog(@"📊BPTRACE RC startReconnectWindow BAILED (autoReconnect=%d connected=%d)",
+              self.autoReconnectEnabled, self.connectedPeripheral != nil);
+        return;
+    }
+    NSLog(@"📊BPTRACE RC window ARM (already=%d deadline=%.0fs)", self.reconnectInProgress, kReconnectWindow);
     self.reconnectInProgress = YES;
     [self.reconnectDeadlineTimer invalidate];
     self.reconnectDeadlineTimer =
@@ -420,6 +425,8 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
 // successful connect (the "pending" peripheral is the one that just connected —
 // cancelling it would drop the live connection).
 - (void)clearReconnectStateCancelPending:(BOOL)cancelPending {
+    NSLog(@"📊BPTRACE RC window CLEAR (was=%d cancelPending=%d hadPending=%d)",
+          self.reconnectInProgress, cancelPending, self.reconnectPendingPeripheral != nil);
     [self.reconnectDeadlineTimer invalidate];
     self.reconnectDeadlineTimer = nil;
     self.reconnectInProgress = NO;
@@ -433,6 +440,7 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
 // (which would otherwise pend forever against a powered-off cuff), stop the
 // scan, and tell JS once so it can show a single clear "check the cuff" action.
 - (void)reconnectWindowExpired {
+    NSLog(@"📊BPTRACE RC window EXPIRED (connected=%d)", self.connectedPeripheral != nil);
     if (self.connectedPeripheral) { [self clearReconnectStateCancelPending:NO]; return; }
     [self clearReconnectStateCancelPending:YES];
     [self.centralManager stopScan];
@@ -634,6 +642,8 @@ static BOOL vt_try_extract_result(NSData *blob,
 }
 
 - (void)beginScanNormal {
+    NSLog(@"📊BPTRACE RC beginScanNormal (reconnectInProgress=%d autoReconnect=%d hasSaved=%d)",
+          self.reconnectInProgress, self.autoReconnectEnabled, self.lastConnectedId != nil);
     [self.centralManager stopScan];
     [self.discoveredPeripherals removeAllObjects];
     [self.peripheralsById removeAllObjects];
@@ -664,6 +674,7 @@ static BOOL vt_try_extract_result(NSData *blob,
                 // Guarded so it arms once per session, not on every 0.35s retry.
                 if (!self.reconnectInProgress) [self startReconnectWindow];
                 self.reconnectPendingPeripheral = p;
+                NSLog(@"📊BPTRACE RC auto-connect saved device (reconnectInProgress=%d)", self.reconnectInProgress);
                 [self.centralManager connectPeripheral:p options:nil];
             }
         }
@@ -671,6 +682,7 @@ static BOOL vt_try_extract_result(NSData *blob,
 }
 
 - (void)beginScanRecovery {
+    NSLog(@"📊BPTRACE RC beginScanRecovery");
     self.inRecoveryRescan = YES;
     [self.centralManager stopScan];
     [self.discoveredPeripherals removeAllObjects];
@@ -701,6 +713,7 @@ static BOOL vt_try_extract_result(NSData *blob,
         } 
     }
     if (!prefixOK) return;
+    NSLog(@"📊BPTRACE RC didDiscover supported '%@' (each beginScanNormal re-emits onDeviceDiscovered -> JS)", deviceName);
 
     if (![self.seenPeripheralIds containsObject:peripheral.identifier]) {
         [self.seenPeripheralIds addObject:peripheral.identifier];
@@ -757,11 +770,14 @@ static BOOL vt_try_extract_result(NSData *blob,
 }
 
 - (void)centralManager:(CBCentralManager *)central didFailToConnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
+    NSLog(@"📊BPTRACE RC didFailToConnect err='%@' reconnectInProgress=%d",
+          error.localizedDescription ?: @"?", self.reconnectInProgress);
     if (self.reconnectInProgress) {
         // Bounded silent retry. Deliberately no handleDeviceError here: emitting
         // onDeviceError every ~0.35s drove a setState storm in JS that froze the
         // UI. The deadline timer (kReconnectWindow) is the sole stop condition;
         // it surfaces the failure once via onReconnectFailed.
+        NSLog(@"📊BPTRACE RC   -> SILENT retry (beginScanNormal in %.2fs)", kScanRestartDelay);
         if (self.reconnectPendingPeripheral == peripheral) self.reconnectPendingPeripheral = nil;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kScanRestartDelay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             if (self.reconnectInProgress) [self beginScanNormal];
@@ -769,6 +785,7 @@ static BOOL vt_try_extract_result(NSData *blob,
         return;
     }
 
+    NSLog(@"📊BPTRACE RC   -> GENERIC error branch (handleDeviceError + beginScanNormal) — UNBOUNDED");
     NSString *errorMsg = error.localizedDescription ?: @"Unknown error";
     [self handleDeviceError:VTMBLEPkgTypeCommonError command:0xFF context:[NSString stringWithFormat:@"Connect failed: %@", errorMsg]];
 
@@ -817,6 +834,8 @@ static BOOL vt_try_extract_result(NSData *blob,
 
     // The cuff commonly auto-powers-off after a reading. Bound the reconnect so
     // that if it stays off, we stop after kReconnectWindow instead of looping.
+    NSLog(@"📊BPTRACE RC didDisconnect (wasMeasuring=%d autoReconnect=%d) -> arm window + recovery",
+          wasMeasuring, self.autoReconnectEnabled);
     if (self.autoReconnectEnabled) {
         [self startReconnectWindow];
     }
@@ -1345,6 +1364,7 @@ RCT_EXPORT_METHOD(enableAutoReconnect:(BOOL)enabled) {
 // Start a bounded reconnect attempt (screen focus). Native owns the stop
 // condition, so JS no longer needs its own retry timer.
 RCT_EXPORT_METHOD(beginReconnect) {
+    NSLog(@"📊BPTRACE RC beginReconnect called from JS (connected=%d)", self.connectedPeripheral != nil);
     if (self.connectedPeripheral) return;
     [self startReconnectWindow];
     if (self.centralManager.state == CBManagerStatePoweredOn) {
@@ -1355,6 +1375,7 @@ RCT_EXPORT_METHOD(beginReconnect) {
 // Cancel any in-flight reconnect (screen blur / leaving the screen), so the
 // scan/connect loop does not keep running in the background.
 RCT_EXPORT_METHOD(cancelReconnect) {
+    NSLog(@"📊BPTRACE RC cancelReconnect called from JS");
     [self clearReconnectStateCancelPending:YES];
     [self.centralManager stopScan];
 }
