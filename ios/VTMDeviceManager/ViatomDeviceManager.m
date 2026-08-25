@@ -13,6 +13,11 @@ static const NSTimeInterval kScanRestartDelay = 0.35;
 // never times out on its own). On expiry we stop, cancel the pending connect,
 // and surface the failure to JS exactly once.
 static const NSTimeInterval kReconnectWindow = 15.0;
+// One reconnect attempt every kReconnectRetryInterval, driven by a single
+// repeating timer — NOT self-scheduled from didFailToConnect (which accumulated
+// into a ~13 Hz main-queue loop). A powered-off cuff needs nothing faster; a cuff
+// that powers back on advertises and is caught immediately by didDiscover.
+static const NSTimeInterval kReconnectRetryInterval = 2.0;
 // Final-result dedup window. A duplicate result PACKET for the same reading
 // arrives within ~1-2s; two genuinely distinct BP readings are >=~30s apart (the
 // inflate/deflate cycle), so a window well inside that gap blocks duplicate
@@ -88,6 +93,7 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 // gates the silent retry loop; the deadline timer owns the stop condition;
 // reconnectPendingPeripheral is the connect we may need to cancel on expiry.
 @property (nonatomic, strong) NSTimer *reconnectDeadlineTimer;
+@property (nonatomic, strong) NSTimer *reconnectRetryTimer;
 @property (nonatomic, assign) BOOL reconnectInProgress;
 @property (nonatomic, strong) CBPeripheral *reconnectPendingPeripheral;
 
@@ -410,7 +416,8 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
               self.autoReconnectEnabled, self.connectedPeripheral != nil);
         return;
     }
-    NSLog(@"📊BPTRACE RC window ARM (already=%d deadline=%.0fs)", self.reconnectInProgress, kReconnectWindow);
+    NSLog(@"📊BPTRACE RC window ARM (already=%d deadline=%.0fs retry=%.1fs)",
+          self.reconnectInProgress, kReconnectWindow, kReconnectRetryInterval);
     self.reconnectInProgress = YES;
     [self.reconnectDeadlineTimer invalidate];
     self.reconnectDeadlineTimer =
@@ -419,6 +426,21 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
                                        selector:@selector(reconnectWindowExpired)
                                        userInfo:nil
                                         repeats:NO];
+    // Single repeating retry — the ONLY thing that re-attempts the connect.
+    // didFailToConnect no longer self-schedules, so retries can't accumulate.
+    [self.reconnectRetryTimer invalidate];
+    self.reconnectRetryTimer =
+        [NSTimer scheduledTimerWithTimeInterval:kReconnectRetryInterval
+                                         target:self
+                                       selector:@selector(reconnectRetryFire)
+                                       userInfo:nil
+                                        repeats:YES];
+}
+
+- (void)reconnectRetryFire {
+    if (self.reconnectInProgress && !self.connectedPeripheral) {
+        [self beginScanNormal];
+    }
 }
 
 // Tear down the window without touching the scan. cancelPending:NO is used on a
@@ -429,6 +451,8 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
           self.reconnectInProgress, cancelPending, self.reconnectPendingPeripheral != nil);
     [self.reconnectDeadlineTimer invalidate];
     self.reconnectDeadlineTimer = nil;
+    [self.reconnectRetryTimer invalidate];
+    self.reconnectRetryTimer = nil;
     self.reconnectInProgress = NO;
     if (cancelPending && self.reconnectPendingPeripheral) {
         [self.centralManager cancelPeripheralConnection:self.reconnectPendingPeripheral];
@@ -645,9 +669,10 @@ static BOOL vt_try_extract_result(NSData *blob,
     NSLog(@"📊BPTRACE RC beginScanNormal (reconnectInProgress=%d autoReconnect=%d hasSaved=%d)",
           self.reconnectInProgress, self.autoReconnectEnabled, self.lastConnectedId != nil);
     [self.centralManager stopScan];
-    [self.discoveredPeripherals removeAllObjects];
-    [self.peripheralsById removeAllObjects];
-    [self.seenPeripheralIds removeAllObjects];
+    // NOTE: deliberately do NOT clear seenPeripheralIds here. This method runs on
+    // every ~2s reconnect retry; clearing the seen-set made each retry re-emit an
+    // onDeviceDiscovered for a device JS already has — a per-cycle bridge flood.
+    // Fresh-session callers (beginReconnect / startScan / beginScanRecovery) clear it.
 
     NSDictionary *opts = @{ CBCentralManagerScanOptionAllowDuplicatesKey: @NO };
     [self.centralManager scanForPeripheralsWithServices:nil options:opts];
@@ -777,11 +802,12 @@ static BOOL vt_try_extract_result(NSData *blob,
         // onDeviceError every ~0.35s drove a setState storm in JS that froze the
         // UI. The deadline timer (kReconnectWindow) is the sole stop condition;
         // it surfaces the failure once via onReconnectFailed.
-        NSLog(@"📊BPTRACE RC   -> SILENT retry (beginScanNormal in %.2fs)", kScanRestartDelay);
+        // Silent: just drop the pending peripheral. Do NOT schedule a retry here —
+        // the repeating reconnectRetryTimer (kReconnectRetryInterval) is the sole
+        // driver, so multiple failures per cycle can no longer accumulate into a
+        // high-frequency loop.
+        NSLog(@"📊BPTRACE RC   -> SILENT (drop pending; retry timer drives next attempt)");
         if (self.reconnectPendingPeripheral == peripheral) self.reconnectPendingPeripheral = nil;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kScanRestartDelay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (self.reconnectInProgress) [self beginScanNormal];
-        });
         return;
     }
 
@@ -1234,6 +1260,10 @@ commandCompletion:(u_char)cmdType
 
 RCT_EXPORT_METHOD(startScan) {
     if (self.centralManager.state == CBManagerStatePoweredOn) {
+        // Manual scan (picker) — reset the seen-set so it re-surfaces devices.
+        [self.discoveredPeripherals removeAllObjects];
+        [self.peripheralsById removeAllObjects];
+        [self.seenPeripheralIds removeAllObjects];
         [self beginScanNormal];
     } else {
         [self sendEventWithName:@"onDeviceError"
@@ -1366,6 +1396,10 @@ RCT_EXPORT_METHOD(enableAutoReconnect:(BOOL)enabled) {
 RCT_EXPORT_METHOD(beginReconnect) {
     NSLog(@"📊BPTRACE RC beginReconnect called from JS (connected=%d)", self.connectedPeripheral != nil);
     if (self.connectedPeripheral) return;
+    // Fresh session — reset the seen-set so the saved device is surfaced once.
+    [self.discoveredPeripherals removeAllObjects];
+    [self.peripheralsById removeAllObjects];
+    [self.seenPeripheralIds removeAllObjects];
     [self startReconnectWindow];
     if (self.centralManager.state == CBManagerStatePoweredOn) {
         [self beginScanNormal];
