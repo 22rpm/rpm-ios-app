@@ -3,9 +3,11 @@
 App Store hotfix for the BLE auto-reconnect lockout (an off/low-battery cuff spun
 the scan/connect loop and froze the screen). Ships ahead of the Q4 measurement/
 parser work. Changed vs `main`: `ios/VTMDeviceManager/ViatomDeviceManager.m`
-(bounded reconnect window + methodQueue + 2s cadence) and TWO small edits to
-`BloodPressure.js` (see "The native-only premise did not hold" below). Nothing
-from the measurement, parser, or polling work is included.
+(bounded reconnect window + methodQueue + 2s cadence), TWO small edits to
+`BloodPressure.js`, and ONE line in `ViatomDeviceManager.js` (expose
+`enableAutoReconnect` so the disconnect button actually disables auto-reconnect
+instead of re-connecting itself). See "The native-only premise did not hold"
+below. Nothing from the measurement, parser, or polling work is included.
 
 ## Archive from a CLEAN worktree — do not archive from your day-to-day tree
 

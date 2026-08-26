@@ -11,6 +11,11 @@ export default {
   connectToDevice: (deviceId) => ViatomDeviceManager.connectToDevice(deviceId),
   disconnectDevice: () => ViatomDeviceManager.disconnectDevice(),
 
+  // Exposed so disconnectDevice's enableAutoReconnect(false) actually disables
+  // auto-reconnect — otherwise a manual disconnect re-connects itself (the native
+  // window arms on didDisconnect while autoReconnect stays on).
+  enableAutoReconnect: (enabled) => ViatomDeviceManager.enableAutoReconnect(enabled),
+
   // Blood Pressure Methods
   // startBPMeasurement: () => ViatomDeviceManager.startBPMeasurement(),
   // stopBPMeasurement: () => ViatomDeviceManager.stopBPMeasurement(),
