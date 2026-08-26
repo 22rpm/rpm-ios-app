@@ -19,6 +19,7 @@ import Profile from './Profile';
 import PrivacySecurity from './PrivacySecurityScreen';
 import AboutApp from './AboutAppScreen';
 import Oxygen from './Oxygen';
+import PatientHome from './PatientHome';
 import { drainOutbox } from './outbox';
 
 const API_BASE = 'https://rmtrpm.duckdns.org/rpm-be';
@@ -170,6 +171,11 @@ export default function App() {
       <Stack.Navigator initialRouteName="Login" screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Login" component={Login} />
         <Stack.Screen name="Home" component={Home} />
+        {/* New patient home (redesign). Registered but NOT yet the landing
+            screen — to activate it, repoint Login's `navigation.replace('Home')`
+            calls to 'PatientHome' (or swap this component onto the "Home" route).
+            Left dormant so it does not ride the 1.0.50 release unreviewed. */}
+        <Stack.Screen name="PatientHome" component={PatientHome} />
         <Stack.Screen name="BloodPressure" component={BloodPressure} />
         <Stack.Screen name="Oxygen" component={Oxygen} />
         <Stack.Screen name='ECG' component={ECG}/>
