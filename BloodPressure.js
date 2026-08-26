@@ -773,8 +773,10 @@ const disconnectionSubscription = ViatomDeviceManager.addListener('onDeviceDisco
   
   // Force UI update
   setConnectedDevice(null);
-  
-  setTimeout(() => safeStartScan(), 600);
+
+  // NOTE: no JS respin here. A mid-session disconnect is owned by native
+  // didDisconnect's bounded reconnect window. The old setTimeout(safeStartScan)
+  // was a JS scan loop the native window can't stop (Test B lock on the hotfix).
 });
 
     const dataSubscription = ViatomDeviceManager.addListener('onRealTimeData', (data) => {
@@ -935,47 +937,33 @@ const resultSubscription = ViatomDeviceManager.addListener('onMeasurementResult'
 useFocusEffect(
   useCallback(() => {
     console.log('[BP] Screen focused, checking connection state');
-
-    // Reset connection verification on fresh start
-    if (!connectionVerified) {
-      console.log('[BP] Fresh start - resetting connection state');
-      setConnectedDevice(null);
-      connectedDeviceRef.current = null;
-    }
-
     ViatomDeviceManager.enableAutoReconnect?.(true);
 
-    if (!connectedDevice) {
+    // Depend on NOTHING and check connectedDeviceRef (not the connectedDevice
+    // state), so this effect runs only on real focus/blur — never re-running on a
+    // mid-session connect/disconnect. Previously [connectedDevice, connectionVerified]
+    // deps made a disconnect re-run this effect, and the 3s/15s timeouts toggling
+    // connectionVerified re-ran it again and again: a JS scan loop the native bounded
+    // reconnect window has no way to stop (the Test B lock on the hotfix). A
+    // mid-session disconnect is now owned entirely by native didDisconnect's window.
+    // (connectedDeviceRef is a placeholder {id:null,...} until connected — gate on .id.)
+    if (!connectedDeviceRef.current?.id) {
       console.log('[BP] No connected device, starting scan');
       safeStartScan();
 
-      // ⏳ 3-second timeout for fallback to manual connect
+      // 3s fallback to the manual picker (cold-tap "device not found").
       const connectionTimeout = setTimeout(() => {
-        if (!connectedDevice) {
-          console.log('[BP] Connection timeout - reverting to manual mode');
+        if (!connectedDeviceRef.current?.id) {
           ViatomDeviceManager.stopScan?.();
-
-          // 🧩 Explicitly reset UI state
-          setConnectedDevice(null);
-          connectedDeviceRef.current = null;
-          setConnectionVerified(false);
-
-          // 🖐 open manual connect modal
           setShowDeviceModal(true);
-
-          // 🗨 notify user
           showToastMessage('Device not found. Please connect manually.');
         }
-      }, 3000); // 3 sec
+      }, 3000);
 
-      // ⏱️ 15-second safety timeout for long scans
+      // 15s safety stop for a long scan.
       const scanTimeout = setTimeout(() => {
-        if (!connectedDevice) {
-          console.log('[BP] Extended scan complete, stopping');
+        if (!connectedDeviceRef.current?.id) {
           ViatomDeviceManager.stopScan?.();
-          if (!connectionVerified) {
-            setConnectionVerified(true);
-          }
         }
       }, 15000);
 
@@ -983,15 +971,12 @@ useFocusEffect(
         clearTimeout(scanTimeout);
         clearTimeout(connectionTimeout);
       };
-    } else {
-      console.log('[BP] Device already connected:', connectedDevice.name);
-      setConnectionVerified(true);
     }
 
-    return () => {
-      console.log('[BP] Screen unfocused - keeping background connection');
-    };
-  }, [connectedDevice, safeStartScan, connectionVerified])
+    console.log('[BP] Device already connected');
+    setConnectionVerified(true);
+    return undefined;
+  }, [])
 );
 
 
