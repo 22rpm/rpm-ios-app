@@ -15,6 +15,7 @@ import globalStyles from './globalStyles';
 import { LineChart } from "react-native-chart-kit";
 import CookieManager from '@react-native-cookies/cookies';
 import axios from 'axios';
+import { API_BASE, DEV_DATA_BASE as API_BASE_URL } from './apiConfig';
 
 const { width, height } = Dimensions.get('window');
 
@@ -23,7 +24,7 @@ const iconBackground = 'transparent';
 
 // Configure axios to include credentials (cookies)
 axios.defaults.withCredentials = true;
-const API_BASE_URL = 'https://rmtrpm.duckdns.org/rpm-be/api/dev-data';
+// API_BASE_URL is imported from apiConfig (DEV_DATA_BASE) — single source of truth.
 
 // Health grid cards
 const healthCards = [
@@ -69,7 +70,7 @@ export default function Home({ navigation }) {
   const fetchUserData = async () => {
     try {
       console.log('Fetching user data...');
-      const response = await fetch('https://rmtrpm.duckdns.org/rpm-be/api/auth/check-me', {
+      const response = await fetch(`${API_BASE}/api/auth/check-me`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -154,7 +155,7 @@ catch (error) {
 
   const handleLogout = async () => {
     try {
-      await fetch('https://rmtrpm.duckdns.org/rpm-be/api/auth/logout', {
+      await fetch(`${API_BASE}/api/auth/logout`, {
         method: 'GET',
         credentials: 'include',
       });

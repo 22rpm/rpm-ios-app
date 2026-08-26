@@ -21,6 +21,7 @@ import O2 from './ViatomO2Manager';
 import globalStyles from './globalStyles';
 import axios from 'axios';
 import SQLite from 'react-native-sqlite-storage';
+import { DEV_DATA_BASE } from './apiConfig';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const BRAND = (globalStyles?.primaryColor?.color) || '#3b82f6'; // fallback if not defined
@@ -64,7 +65,7 @@ export default function Oxygen({ navigation }) {
   const [activeTab, setActiveTab] = useState('LIST');
   const [refreshing, setRefreshing] = useState(false);
 
-  const API_BASE_URL = 'https://rmtrpm.duckdns.org/rpm-be/api/dev-data';
+  const API_BASE_URL = DEV_DATA_BASE;
 const DEV_TYPE = 'spo2';
 
 const storeDeviceData = async (deviceData) => {

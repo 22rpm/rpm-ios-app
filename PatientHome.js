@@ -40,13 +40,10 @@ import axios from 'axios';
 import ViatomDeviceManager from './ViatomDeviceManager';
 import { drainOutbox } from './outbox';
 import globalStyles from './globalStyles';
+import { API_BASE as AUTH_BASE, DEV_DATA_BASE } from './apiConfig';
 
-// Two API bases — mirror the existing Home.js: the device-data reads are on the
-// prod host directly (Home.js hard-codes this too), NOT apiConfig.DEV_DATA_BASE
-// which is currently pointed at a LAN dev box. Deliberate: the display path must
-// hit prod regardless of a developer's local apiConfig edit.
-const AUTH_BASE = 'https://rmtrpm.duckdns.org/rpm-be';
-const DEV_DATA_BASE = 'https://rmtrpm.duckdns.org/rpm-be/api/dev-data';
+// Hosts come from apiConfig (single source of truth): AUTH_BASE for check-me,
+// DEV_DATA_BASE for the latest-reading GET.
 
 // Palette (screens define local colors; brand primary comes from globalStyles).
 const NAVY = '#103c63';

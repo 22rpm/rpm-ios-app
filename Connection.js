@@ -19,6 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createStackNavigator } from '@react-navigation/stack';
 import io from "socket.io-client";
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { MESSAGES_BASE, SOCKET_BASE } from './apiConfig';
 
 const { width, height } = Dimensions.get('window');
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -29,7 +30,7 @@ function ConversationsList({ navigation }) {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const API_BASE = 'https://rmtrpm.duckdns.org/rpm-be/api/messages';
+  const API_BASE = MESSAGES_BASE;
 
   const handleBack = () => {
     navigation.navigate('Home');
@@ -190,7 +191,7 @@ function ChatScreen({ navigation, route }) {
   const receiverId = route?.params?.receiverId || 3;
   const receiverName = route?.params?.receiverName || 'Dr. Amir';
 
-  const API_BASE = 'https://rmtrpm.duckdns.org/rpm-be/api/messages';
+  const API_BASE = MESSAGES_BASE;
 
   // Socket connection
   useEffect(() => {
@@ -198,7 +199,7 @@ function ChatScreen({ navigation, route }) {
     const initSocket = async () => {
       const token = await AsyncStorage.getItem("token");
 
-      newSocket = io("https://rmtrpm.duckdns.org", {
+      newSocket = io(SOCKET_BASE, {
         path: "/rpm-be/socket.io/",
         withCredentials: true,
         extraHeaders: {

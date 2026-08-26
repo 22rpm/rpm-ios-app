@@ -14,6 +14,7 @@ import {
   getBiometricEmail,
   clearBiometricCredentials,
 } from './biometricCredentials';
+import { API_BASE } from './apiConfig';
 
 const { width, height } = Dimensions.get('window');
 
@@ -172,7 +173,7 @@ export default function Login({ navigation }) {
         // Determine login method based on stored identifier
         const method = storedEmail.includes('@') ? 'email' : 'username';
         
-        const response = await fetch('https://rmtrpm.duckdns.org/rpm-be/api/auth/login', {
+        const response = await fetch(`${API_BASE}/api/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -200,7 +201,7 @@ export default function Login({ navigation }) {
         if (response.ok && data.requiresOtp) {
           setShowOtpModal(true);
         } else if (response.ok && data.token) {
-          const cookies = await CookieManager.get('https://rmtrpm.duckdns.org/rpm-be');
+          const cookies = await CookieManager.get(API_BASE);
           const accessToken = cookies?.token?.value;
           const refreshToken = cookies?.refresh_token?.value;
           
@@ -286,7 +287,7 @@ export default function Login({ navigation }) {
     const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
     try {
-      response = await fetch('https://rmtrpm.duckdns.org/rpm-be/api/auth/login', {
+      response = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -349,7 +350,7 @@ export default function Login({ navigation }) {
       
       // Try to get cookies with error handling
       try {
-        const cookies = await CookieManager.get('https://rmtrpm.duckdns.org/rpm-be');
+        const cookies = await CookieManager.get(API_BASE);
         console.log('Cookies retrieved:', cookies ? 'Yes' : 'No');
         
         const accessToken = cookies?.token?.value || data.token;
@@ -442,7 +443,7 @@ export default function Login({ navigation }) {
   //     // Determine if identifier is email or username
   //     const method = userIdentifier.includes('@') ? 'email' : 'username';
 
-  //     const response = await fetch('https://rmtrpm.duckdns.org/rpm-be/api/auth/login', {
+  //     const response = await fetch(`${API_BASE}/api/auth/login`, {
   //       method: 'POST',
   //       headers: { 'Content-Type': 'application/json' },
   //       credentials: 'include',
@@ -470,7 +471,7 @@ export default function Login({ navigation }) {
   //       setShowOtpModal(true);
   //     } else if (response.ok && data.token) {
   //       console.log('Login successful, saving tokens');
-  //       const cookies = await CookieManager.get('https://rmtrpm.duckdns.org/rpm-be');
+  //       const cookies = await CookieManager.get(API_BASE);
   //       const accessToken = cookies?.token?.value;
   //       const refreshToken = cookies?.refresh_token?.value;
         
@@ -541,7 +542,7 @@ export default function Login({ navigation }) {
     setError('');
 
     try {
-      const response = await fetch('https://rmtrpm.duckdns.org/rpm-be/api/auth/verify-otp', {
+      const response = await fetch(`${API_BASE}/api/auth/verify-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -555,7 +556,7 @@ export default function Login({ navigation }) {
       const data = await response.json();
 
       if (response.ok) {
-        const cookies = await CookieManager.get('https://rmtrpm.duckdns.org/rpm-be');
+        const cookies = await CookieManager.get(API_BASE);
         const accessToken = cookies?.token?.value;
         const refreshToken = cookies?.refresh_token?.value;
 
@@ -601,7 +602,7 @@ export default function Login({ navigation }) {
   // Refresh auth token function
   const refreshAuthToken = async () => {
     try {
-      const response = await fetch('https://rmtrpm.duckdns.org/rpm-be/api/auth/refresh-token', {
+      const response = await fetch(`${API_BASE}/api/auth/refresh-token`, {
         method: 'POST',
         credentials: 'include',
       });

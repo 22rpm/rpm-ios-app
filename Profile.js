@@ -15,6 +15,7 @@ import {
 import globalStyles from './globalStyles';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { API_BASE } from './apiConfig';
 
 const { width, height } = Dimensions.get('window');
 
@@ -51,7 +52,7 @@ export default function Profile({ navigation }) {
         return;
       }
 
-      const response = await fetch('https://rmtrpm.duckdns.org/rpm-be/api/auth/check-me', {
+      const response = await fetch(`${API_BASE}/api/auth/check-me`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',

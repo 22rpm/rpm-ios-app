@@ -22,7 +22,7 @@ import Oxygen from './Oxygen';
 import PatientHome from './PatientHome';
 import { drainOutbox } from './outbox';
 
-const API_BASE = 'https://rmtrpm.duckdns.org/rpm-be';
+import { API_BASE } from './apiConfig';
 
 export default function App() {
   const Stack = createStackNavigator();
