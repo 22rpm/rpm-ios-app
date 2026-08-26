@@ -1,4 +1,4 @@
-# Release: fix/bp-reconnect-loop-hotfix (1.0.27 / build 31)
+# Release: fix/bp-reconnect-loop-hotfix (1.0.49 / build = highest-uploaded + 1)
 
 App Store hotfix for the BLE auto-reconnect lockout (an off/low-battery cuff spun
 the scan/connect loop and froze the screen). Ships ahead of the Q4 measurement/
@@ -30,19 +30,30 @@ grep -rn "192.168" /tmp/rpm-release --include=*.js   # must return NOTHING
 grep -rn "API_BASE" /tmp/rpm-release/App.js          # must be the prod URL
 ```
 
-## Version / build
+## Version / build — CHECK THE LIVE APP STORE VERSION FIRST
 
-- `MARKETING_VERSION` = **1.0.27** (was 1.0.26)
-- `CURRENT_PROJECT_VERSION` = **31** (was 30) — must be higher than any build ever
-  uploaded for this version, or App Store Connect rejects the upload.
+The repo's version string had drifted **20+ releases behind** the live App Store
+version (repo said 1.0.27; the App Store was on **1.0.48**), and validation rejected
+the upload: "CFBundleShortVersionString must be higher than the previously approved
+version." **Never set the bump from the repo — read what is actually published.**
 
-Both set in `RPM_App.xcodeproj/project.pbxproj` (Debug + Release) on this branch.
+- Live App Store version: App Store Connect → your app → the current live version.
+- Highest build number ever uploaded: App Store Connect → **TestFlight → iOS**
+  (Builds), each row is `version (build)`; take the max build across ALL rows.
+
+Then:
+- `MARKETING_VERSION` = **1.0.49** (must exceed the live 1.0.48). Set on this branch.
+- `CURRENT_PROJECT_VERSION` = **(highest uploaded build) + 1** — monotonic app-wide so
+  it can never collide. Set this in Xcode's General tab before archiving (the branch
+  still holds a placeholder until the real number is known).
+
+Both live in `RPM_App.xcodeproj/project.pbxproj` (Debug + Release).
 
 ## Archive → upload
 
 Xcode: destination **Any iOS Device (arm64)** → **Product ▸ Archive** →
 Organizer **Distribute App ▸ App Store Connect ▸ Upload**. Then in App Store
-Connect create version 1.0.27, attach the processed build, add release notes,
+Connect create version 1.0.49, attach the processed build, add release notes,
 answer export compliance (standard HTTPS = exempt), and submit. Choose manual
 release. Ensure the App Review demo patient account still logs in.
 
@@ -92,3 +103,18 @@ intact. (The cold-tap path still shows the "Device not found" picker at 3s.)
 ```bash
 git worktree remove /tmp/rpm-release
 ```
+
+## Known non-blocker: "Upload Symbols Failed — no dSYM for hermes.framework"
+
+This warning appears during Distribute and does **NOT** block the upload or the
+release — the build ships fine. It only means Apple can't symbolicate crashes that
+occur inside the Hermes JS engine (you'd see hex addresses instead of frames in
+Xcode Organizer's crash reports). Everything else symbolicates normally. Safe to
+ship now; fix later.
+
+Fix (later): a known React Native/Hermes packaging gap — the prebuilt
+`hermes.framework` isn't shipping its `.dSYM` in the archive. Options when you get
+to it: confirm Release build setting `DEBUG_INFORMATION_FORMAT = dwarf-with-dsym`;
+or add a build phase / use the dSYM from the `hermes-engine` pod
+(`Pods/hermes-engine/destroot/.../hermes.framework.dSYM`) so it's copied into the
+archive's dSYMs. Tracked so it isn't forgotten, but it does not gate this release.
