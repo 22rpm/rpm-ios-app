@@ -6,6 +6,17 @@
 #import <React/RCTLog.h>
 #import <AVFoundation/AVFoundation.h>
 
+// Verbose BP trace logging (the "📊BPTRACE" lines). Compiled OUT of Release
+// builds — too noisy for production, and several lines carry BP values (PHI)
+// that must not land in the device console log. DEBUG builds keep full tracing
+// for on-device diagnostics. Every trace arg is a side-effect-free read, so
+// dropping them in Release changes nothing but the logging itself.
+#ifdef DEBUG
+#define RPMTRACE(...) NSLog(__VA_ARGS__)
+#else
+#define RPMTRACE(...) ((void)0)
+#endif
+
 static NSString * const kViatomCentralRestoreId = @"com.rpmapp.viatom.central.restore";
 static const NSTimeInterval kScanRestartDelay = 0.35;
 // Auto-reconnect is bounded to a wall-clock window so an off/unreachable cuff
@@ -318,7 +329,7 @@ RCT_EXPORT_MODULE();
         [self speak:@"Measurement started"];
         
         NSLog(@"[Viatom] Measurement started - Device initiated: YES");
-        NSLog(@"📊BPTRACE ===== MEASUREMENT START (device-initiated) =====");
+        RPMTRACE(@"📊BPTRACE ===== MEASUREMENT START (device-initiated) =====");
     }
     // Measurement ended normally
 // Measurement ended normally
@@ -360,7 +371,7 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
     self.isWaitingForBPResult = NO;
     self.lowPressureStreak = 0;
     self.lastResultSig = nil;  // re-arm dedup on any terminal transition
-    NSLog(@"📊BPTRACE ===== MEASUREMENT END reason=%@ completed=%d =====", reason, completed);
+    RPMTRACE(@"📊BPTRACE ===== MEASUREMENT END reason=%@ completed=%d =====", reason, completed);
 
     [self stopRealDataPuller];
     [self.measurementTimeoutTimer invalidate];
@@ -412,11 +423,11 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
 // clock, which is what we want.
 - (void)startReconnectWindow {
     if (!self.autoReconnectEnabled || self.connectedPeripheral) {
-        NSLog(@"📊BPTRACE RC startReconnectWindow BAILED (autoReconnect=%d connected=%d)",
+        RPMTRACE(@"📊BPTRACE RC startReconnectWindow BAILED (autoReconnect=%d connected=%d)",
               self.autoReconnectEnabled, self.connectedPeripheral != nil);
         return;
     }
-    NSLog(@"📊BPTRACE RC window ARM (already=%d deadline=%.0fs retry=%.1fs)",
+    RPMTRACE(@"📊BPTRACE RC window ARM (already=%d deadline=%.0fs retry=%.1fs)",
           self.reconnectInProgress, kReconnectWindow, kReconnectRetryInterval);
     self.reconnectInProgress = YES;
     [self.reconnectDeadlineTimer invalidate];
@@ -447,7 +458,7 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
 // successful connect (the "pending" peripheral is the one that just connected —
 // cancelling it would drop the live connection).
 - (void)clearReconnectStateCancelPending:(BOOL)cancelPending {
-    NSLog(@"📊BPTRACE RC window CLEAR (was=%d cancelPending=%d hadPending=%d)",
+    RPMTRACE(@"📊BPTRACE RC window CLEAR (was=%d cancelPending=%d hadPending=%d)",
           self.reconnectInProgress, cancelPending, self.reconnectPendingPeripheral != nil);
     [self.reconnectDeadlineTimer invalidate];
     self.reconnectDeadlineTimer = nil;
@@ -464,7 +475,7 @@ else if (wasMeasuring && (status == VTMBPStatusBPMeasureEnd ||
 // (which would otherwise pend forever against a powered-off cuff), stop the
 // scan, and tell JS once so it can show a single clear "check the cuff" action.
 - (void)reconnectWindowExpired {
-    NSLog(@"📊BPTRACE RC window EXPIRED (connected=%d)", self.connectedPeripheral != nil);
+    RPMTRACE(@"📊BPTRACE RC window EXPIRED (connected=%d)", self.connectedPeripheral != nil);
     if (self.connectedPeripheral) { [self clearReconnectStateCancelPending:NO]; return; }
     [self clearReconnectStateCancelPending:YES];
     [self.centralManager stopScan];
@@ -666,7 +677,7 @@ static BOOL vt_try_extract_result(NSData *blob,
 }
 
 - (void)beginScanNormal {
-    NSLog(@"📊BPTRACE RC beginScanNormal (reconnectInProgress=%d autoReconnect=%d hasSaved=%d)",
+    RPMTRACE(@"📊BPTRACE RC beginScanNormal (reconnectInProgress=%d autoReconnect=%d hasSaved=%d)",
           self.reconnectInProgress, self.autoReconnectEnabled, self.lastConnectedId != nil);
     [self.centralManager stopScan];
     // NOTE: deliberately do NOT clear seenPeripheralIds here. This method runs on
@@ -699,7 +710,7 @@ static BOOL vt_try_extract_result(NSData *blob,
                 // Guarded so it arms once per session, not on every 0.35s retry.
                 if (!self.reconnectInProgress) [self startReconnectWindow];
                 self.reconnectPendingPeripheral = p;
-                NSLog(@"📊BPTRACE RC auto-connect saved device (reconnectInProgress=%d)", self.reconnectInProgress);
+                RPMTRACE(@"📊BPTRACE RC auto-connect saved device (reconnectInProgress=%d)", self.reconnectInProgress);
                 [self.centralManager connectPeripheral:p options:nil];
             }
         }
@@ -707,7 +718,7 @@ static BOOL vt_try_extract_result(NSData *blob,
 }
 
 - (void)beginScanRecovery {
-    NSLog(@"📊BPTRACE RC beginScanRecovery");
+    RPMTRACE(@"📊BPTRACE RC beginScanRecovery");
     self.inRecoveryRescan = YES;
     [self.centralManager stopScan];
     [self.discoveredPeripherals removeAllObjects];
@@ -738,7 +749,7 @@ static BOOL vt_try_extract_result(NSData *blob,
         } 
     }
     if (!prefixOK) return;
-    NSLog(@"📊BPTRACE RC didDiscover supported '%@' (each beginScanNormal re-emits onDeviceDiscovered -> JS)", deviceName);
+    RPMTRACE(@"📊BPTRACE RC didDiscover supported '%@' (each beginScanNormal re-emits onDeviceDiscovered -> JS)", deviceName);
 
     if (![self.seenPeripheralIds containsObject:peripheral.identifier]) {
         [self.seenPeripheralIds addObject:peripheral.identifier];
@@ -795,7 +806,7 @@ static BOOL vt_try_extract_result(NSData *blob,
 }
 
 - (void)centralManager:(CBCentralManager *)central didFailToConnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
-    NSLog(@"📊BPTRACE RC didFailToConnect err='%@' reconnectInProgress=%d",
+    RPMTRACE(@"📊BPTRACE RC didFailToConnect err='%@' reconnectInProgress=%d",
           error.localizedDescription ?: @"?", self.reconnectInProgress);
     if (self.reconnectInProgress) {
         // Bounded silent retry. Deliberately no handleDeviceError here: emitting
@@ -806,12 +817,12 @@ static BOOL vt_try_extract_result(NSData *blob,
         // the repeating reconnectRetryTimer (kReconnectRetryInterval) is the sole
         // driver, so multiple failures per cycle can no longer accumulate into a
         // high-frequency loop.
-        NSLog(@"📊BPTRACE RC   -> SILENT (drop pending; retry timer drives next attempt)");
+        RPMTRACE(@"📊BPTRACE RC   -> SILENT (drop pending; retry timer drives next attempt)");
         if (self.reconnectPendingPeripheral == peripheral) self.reconnectPendingPeripheral = nil;
         return;
     }
 
-    NSLog(@"📊BPTRACE RC   -> GENERIC error branch (handleDeviceError + beginScanNormal) — UNBOUNDED");
+    RPMTRACE(@"📊BPTRACE RC   -> GENERIC error branch (handleDeviceError + beginScanNormal) — UNBOUNDED");
     NSString *errorMsg = error.localizedDescription ?: @"Unknown error";
     [self handleDeviceError:VTMBLEPkgTypeCommonError command:0xFF context:[NSString stringWithFormat:@"Connect failed: %@", errorMsg]];
 
@@ -860,7 +871,7 @@ static BOOL vt_try_extract_result(NSData *blob,
 
     // The cuff commonly auto-powers-off after a reading. Bound the reconnect so
     // that if it stays off, we stop after kReconnectWindow instead of looping.
-    NSLog(@"📊BPTRACE RC didDisconnect (wasMeasuring=%d autoReconnect=%d) -> arm window + recovery",
+    RPMTRACE(@"📊BPTRACE RC didDisconnect (wasMeasuring=%d autoReconnect=%d) -> arm window + recovery",
           wasMeasuring, self.autoReconnectEnabled);
     if (self.autoReconnectEnabled) {
         [self startReconnectWindow];
@@ -898,7 +909,7 @@ commandSendFailed:(u_char)errorCode {
     // errorCode per SDK: 0=peripheral nil, 1=tx characteristic nil,
     // 2=not connected, 3=TIMEOUT. A timeout here during a measurement is the
     // signature of command-queue contention preempting the result response.
-    NSLog(@"📊BPTRACE commandSendFailed errorCode=%d (3=TIMEOUT) waitingForResult=%d measuring=%d",
+    RPMTRACE(@"📊BPTRACE commandSendFailed errorCode=%d (3=TIMEOUT) waitingForResult=%d measuring=%d",
           errorCode, self.isWaitingForBPResult, self.isMeasurementInProgress);
     NSLog(@"[Viatom] Command send failed with code: %d", errorCode);
     [self handleDeviceError:VTMBLEPkgTypeCommonError command:0xFF context:@"Command send failed"];
@@ -909,7 +920,7 @@ commandFailed:(u_char)cmdType
  deviceType:(VTMDeviceType)deviceType
  failedType:(VTMBLEPkgType)type {
     
-    NSLog(@"📊BPTRACE commandFailed cmd=0x%02X failedType=%d waitingForResult=%d measuring=%d",
+    RPMTRACE(@"📊BPTRACE commandFailed cmd=0x%02X failedType=%d waitingForResult=%d measuring=%d",
           cmdType, type, self.isWaitingForBPResult, self.isMeasurementInProgress);
     NSLog(@"[Viatom] Command 0x%02X failed with error: %d", cmdType, type);
     [self handleDeviceError:type command:cmdType context:@"Command execution failed"];
@@ -923,13 +934,13 @@ commandCompletion:(u_char)cmdType
     // 📊BPTRACE: raw funnel. Every command response the SDK delivers, with its
     // command byte, length, and full bytes. If a measurement's result never shows
     // up here, the loss is at/below the SDK (BLE/CRC), above anything we parse.
-    NSLog(@"📊BPTRACE cmd=0x%02X devType=%d len=%lu bytes=%@",
+    RPMTRACE(@"📊BPTRACE cmd=0x%02X devType=%d len=%lu bytes=%@",
           cmdType, deviceType, (unsigned long)response.length, response);
 
     if (cmdType == VTMBPCmdGetRealData) {
         const uint8_t *p = (const uint8_t *)response.bytes;
         const NSUInteger n = response.length;
-        NSLog(@"📊BPTRACE GetRealData n=%lu waitingForResult=%d measuring=%d",
+        RPMTRACE(@"📊BPTRACE GetRealData n=%lu waitingForResult=%d measuring=%d",
               (unsigned long)n, self.isWaitingForBPResult, self.isMeasurementInProgress);
 
         // Length-INDEPENDENT result extraction. The old hardcoded length gate
@@ -965,7 +976,7 @@ commandCompletion:(u_char)cmdType
                 gotResult = vt_try_extract_result(response, &rSys, &rDia, &rMean, &rPulse);
             }
             if (gotResult) {
-                NSLog(@"📊BPTRACE RESULT extracted (SDK/scan) sys=%u dia=%u mean=%u pulse=%u n=%lu",
+                RPMTRACE(@"📊BPTRACE RESULT extracted (SDK/scan) sys=%u dia=%u mean=%u pulse=%u n=%lu",
                       rSys, rDia, rMean, rPulse, (unsigned long)n);
                 [self sendFinalBPResultOnce:@{
                     @"type": @"BP_RESULT",
@@ -1048,7 +1059,7 @@ commandCompletion:(u_char)cmdType
 
         @try {
             VTMBPRealTimeData rt = [VTMBLEParser parseBPRealTimeData:response];
-            NSLog(@"📊BPTRACE GetRealData fallback parse run_status=%d (n=%lu)",
+            RPMTRACE(@"📊BPTRACE GetRealData fallback parse run_status=%d (n=%lu)",
                   rt.run_status.status, (unsigned long)n);
             if (rt.run_status.status == VTMBPStatusBPMeasureEnd) {
                 [self sendEventWithName:@"onBPStatusChanged" body:@{@"status": @"measurement_completed"}];
@@ -1063,7 +1074,7 @@ commandCompletion:(u_char)cmdType
         } @catch (NSException *e) {
             NSLog(@"[Viatom] Error parsing realtime data: %@", e);
         }
-        NSLog(@"📊BPTRACE GetRealData n=%lu fell through ALL result branches — NO result sent", (unsigned long)n);
+        RPMTRACE(@"📊BPTRACE GetRealData n=%lu fell through ALL result branches — NO result sent", (unsigned long)n);
         return;
     }
 
@@ -1177,7 +1188,7 @@ commandCompletion:(u_char)cmdType
 #pragma mark - Helpers
 
 - (void)exitBPMode {
-    NSLog(@"📊BPTRACE exitBPMode called (measuring=%d, lastResultSig=%@) — switching device to History mode",
+    RPMTRACE(@"📊BPTRACE exitBPMode called (measuring=%d, lastResultSig=%@) — switching device to History mode",
           self.isMeasurementInProgress, self.lastResultSig ?: @"(none)");
     if (self.isMeasurementInProgress) {
         [self.viatomUtils requestChangeBPState:2]; // to History; exits BP mode safely
@@ -1186,7 +1197,7 @@ commandCompletion:(u_char)cmdType
 }
 
 - (void)measurementTimeout {
-    NSLog(@"📊BPTRACE MEASUREMENT TIMEOUT (180s) — no result packet arrived");
+    RPMTRACE(@"📊BPTRACE MEASUREMENT TIMEOUT (180s) — no result packet arrived");
     [self handleMeasurementError:@"MEASUREMENT_TIMEOUT"
                          message:@"The measurement took too long. Please try again."];
 }
@@ -1194,7 +1205,7 @@ commandCompletion:(u_char)cmdType
 - (void)forceExitAfterNoResult {
     self.lastResultWaitTimer = nil;
     if (self.isMeasurementInProgress) {
-        NSLog(@"📊BPTRACE forceExitAfterNoResult — MeasureEnd seen but NO result packet; starting retries");
+        RPMTRACE(@"📊BPTRACE forceExitAfterNoResult — MeasureEnd seen but NO result packet; starting retries");
         NSLog(@"[Viatom] Force exit - no result received after completion");
         
         // Try multiple attempts to get the result
@@ -1394,7 +1405,7 @@ RCT_EXPORT_METHOD(enableAutoReconnect:(BOOL)enabled) {
 // Start a bounded reconnect attempt (screen focus). Native owns the stop
 // condition, so JS no longer needs its own retry timer.
 RCT_EXPORT_METHOD(beginReconnect) {
-    NSLog(@"📊BPTRACE RC beginReconnect called from JS (connected=%d)", self.connectedPeripheral != nil);
+    RPMTRACE(@"📊BPTRACE RC beginReconnect called from JS (connected=%d)", self.connectedPeripheral != nil);
     if (self.connectedPeripheral) return;
     // Fresh session — reset the seen-set so the saved device is surfaced once.
     [self.discoveredPeripherals removeAllObjects];
@@ -1409,7 +1420,7 @@ RCT_EXPORT_METHOD(beginReconnect) {
 // Cancel any in-flight reconnect (screen blur / leaving the screen), so the
 // scan/connect loop does not keep running in the background.
 RCT_EXPORT_METHOD(cancelReconnect) {
-    NSLog(@"📊BPTRACE RC cancelReconnect called from JS");
+    RPMTRACE(@"📊BPTRACE RC cancelReconnect called from JS");
     [self clearReconnectStateCancelPending:YES];
     [self.centralManager stopScan];
 }
@@ -1483,7 +1494,7 @@ RCT_EXPORT_METHOD(setVoiceEnabled:(BOOL)enabled) {
     NSMutableArray *queue = [self loadOutbox];
     [queue addObject:record];
     BOOL wrote = [self saveOutbox:queue];
-    NSLog(@"📊BPTRACE outbox WRITE ok=%d sys=%@ dia=%@ pulse=%@ id=%@ ts=%@ queueLen=%lu",
+    RPMTRACE(@"📊BPTRACE outbox WRITE ok=%d sys=%@ dia=%@ pulse=%@ id=%@ ts=%@ queueLen=%lu",
           wrote, record[@"systolic"], record[@"diastolic"], record[@"pulse"],
           record[@"id"], record[@"timestamp"], (unsigned long)queue.count);
     return record;
@@ -1492,7 +1503,7 @@ RCT_EXPORT_METHOD(setVoiceEnabled:(BOOL)enabled) {
 RCT_EXPORT_METHOD(getPendingResults:(RCTPromiseResolveBlock)resolve
                           rejecter:(RCTPromiseRejectBlock)reject) {
     NSArray *q = [self loadOutbox];
-    NSLog(@"📊BPTRACE getPendingResults returning %lu row(s)", (unsigned long)q.count);
+    RPMTRACE(@"📊BPTRACE getPendingResults returning %lu row(s)", (unsigned long)q.count);
     resolve(q);
 }
 
@@ -1503,13 +1514,13 @@ RCT_EXPORT_METHOD(clearPendingResult:(NSString *)recordId) {
     [queue filterUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id obj, NSDictionary *b) {
         return ![[obj objectForKey:@"id"] isEqual:recordId];
     }]];
-    NSLog(@"📊BPTRACE clearPendingResult id=%@ removed=%lu (before=%lu after=%lu)",
+    RPMTRACE(@"📊BPTRACE clearPendingResult id=%@ removed=%lu (before=%lu after=%lu)",
           recordId, (unsigned long)(before - queue.count), (unsigned long)before, (unsigned long)queue.count);
     if (queue.count != before) [self saveOutbox:queue];
 }
 
 - (void)sendFinalBPResultOnce:(NSDictionary *)result {
-    NSLog(@"📊BPTRACE sendFinalBPResultOnce ENTER sys=%@ dia=%@ pulse=%@",
+    RPMTRACE(@"📊BPTRACE sendFinalBPResultOnce ENTER sys=%@ dia=%@ pulse=%@",
           result[@"systolic"], result[@"diastolic"], result[@"pulse"]);
     // Content + time dedup: block only a duplicate PACKET of the SAME reading
     // within kResultDedupWindow. A genuinely new reading (different values, or the
@@ -1521,12 +1532,12 @@ RCT_EXPORT_METHOD(clearPendingResult:(NSString *)recordId) {
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
     if (self.lastResultSig && [self.lastResultSig isEqualToString:sig]
         && (now - self.lastResultAt) < kResultDedupWindow) {
-        NSLog(@"📊BPTRACE result SKIPPED as duplicate (within %.0fs)", kResultDedupWindow);
+        RPMTRACE(@"📊BPTRACE result SKIPPED as duplicate (within %.0fs)", kResultDedupWindow);
         return;
     }
     self.lastResultSig = sig;
     self.lastResultAt = now;
-    NSLog(@"📊BPTRACE result ACCEPTED (new) — writing to outbox");
+    RPMTRACE(@"📊BPTRACE result ACCEPTED (new) — writing to outbox");
 
     // WRITE FIRST. Persist to the durable outbox before any JS notification or
     // UI update, so a crash immediately after cannot lose the reading.
