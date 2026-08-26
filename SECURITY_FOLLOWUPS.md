@@ -4,7 +4,7 @@ Tracked, NOT fixed. iOS-app findings. Surfaced during the Q4 BP release prep on
 `fix/bp-auto-reconnect` (2026-08-26). The backend equivalent lives in
 `rpm-backend/SECURITY_FOLLOWUPS.md`; this is the iOS-side list.
 
-## 1. Account password stored in plaintext in AsyncStorage (biometric login) — HIGH, LIVE in prod
+## 1. Account password stored in plaintext in AsyncStorage (biometric login) — RESOLVED (Keychain migration)
 
 **What.** When a patient enables Face ID login, their account password is written
 verbatim to AsyncStorage:
@@ -51,3 +51,26 @@ loop, not the storage, so it neither introduced nor addresses this.
   biometric **prompt**, not secure storage. Keychain access needs either
   `react-native-keychain` (a new JS dependency) or a small native Keychain module
   (no new JS dependency). Decide the dependency question when scheduling the fix.
+
+**Resolved.** The credential now lives in the iOS Keychain via
+`biometricCredentials.js` (encrypted at rest, `WHEN_PASSCODE_SET_THIS_DEVICE_ONLY`,
+no iCloud sync). `Login.js` calls the helper at all six sites; the plaintext
+`biometric_email` / `biometric_password` keys are gone. A one-time migration copies
+an existing AsyncStorage credential into the Keychain on first read and deletes the
+plaintext copy — and if the Keychain write fails mid-migration it KEEPS the legacy
+copy so an existing user is never locked out. All reads are fail-safe (return null,
+never throw), so a Keychain failure degrades to manual password entry rather than a
+dead biometric login. Covered by `__tests__/biometricCredentials.test.js` (8 tests,
+incl. the migration and lockout-risk paths). `react-native-keychain@10` was already
+a linked dependency, so no new dep.
+
+**Two residual notes (not blocking):**
+- *iOS Keychain persists across app uninstall* (AsyncStorage did NOT — it's wiped
+  with the app container). So the now-encrypted credential survives a
+  delete-and-reinstall. If uninstall should clear it, add the standard
+  first-launch-after-reinstall reset: keep a sentinel in AsyncStorage (wiped on
+  uninstall) and, when it's absent on launch, `resetGenericPassword` before use.
+- *Further hardening (optional):* attach a biometric `accessControl` to the Keychain
+  item itself (defense-in-depth beyond the app's react-native-biometrics gate), or
+  stop storing the password entirely in favor of a revocable server-issued device
+  token exchanged on unlock.

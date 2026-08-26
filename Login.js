@@ -8,6 +8,12 @@ import globalStyles from './globalStyles';
 import CookieManager from '@react-native-cookies/cookies';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ReactNativeBiometrics from 'react-native-biometrics';
+import {
+  saveBiometricCredentials,
+  getBiometricCredentials,
+  getBiometricEmail,
+  clearBiometricCredentials,
+} from './biometricCredentials';
 
 const { width, height } = Dimensions.get('window');
 
@@ -49,13 +55,12 @@ export default function Login({ navigation }) {
           console.log(`Biometric type: ${biometryType}`);
         }
 
-        // Check for stored credentials
-        const storedEmail = await AsyncStorage.getItem('biometric_email');
-        const storedPassword = await AsyncStorage.getItem('biometric_password');
-        
-        if (storedEmail && storedPassword) {
+        // Check for stored credentials (Keychain, migrating any legacy copy).
+        const creds = await getBiometricCredentials();
+
+        if (creds) {
           setHasBiometricCredentials(true);
-          setEmail(storedEmail);
+          setEmail(creds.email);
           
           // Auto trigger Face ID after a short delay
           setTimeout(() => {
@@ -111,7 +116,7 @@ export default function Login({ navigation }) {
     try {
       const rnBiometrics = new ReactNativeBiometrics();
 
-      const storedEmail = await AsyncStorage.getItem('biometric_email');
+      const storedEmail = await getBiometricEmail();
       const promptMessage = 'Face ID for ' + (storedEmail || 'your account');
 
       const { success } = await rnBiometrics.simplePrompt({
@@ -157,9 +162,10 @@ export default function Login({ navigation }) {
 
   const performAutoLogin = async () => {
     try {
-      const storedEmail = await AsyncStorage.getItem('biometric_email');
-      const storedPassword = await AsyncStorage.getItem('biometric_password');
-      
+      const creds = await getBiometricCredentials();
+      const storedEmail = creds ? creds.email : null;
+      const storedPassword = creds ? creds.password : null;
+
       if (storedEmail && storedPassword) {
         setIsLoading(true);
         
@@ -225,8 +231,7 @@ export default function Login({ navigation }) {
 
   const storeCredentialsForBiometric = async (userEmail, userPassword) => {
     try {
-      await AsyncStorage.setItem('biometric_email', userEmail);
-      await AsyncStorage.setItem('biometric_password', userPassword);
+      await saveBiometricCredentials(userEmail, userPassword);
       setHasBiometricCredentials(true);
     } catch (error) {
       console.error('Error storing credentials:', error);
@@ -235,8 +240,7 @@ export default function Login({ navigation }) {
 
   const removeStoredCredentials = async () => {
     try {
-      await AsyncStorage.removeItem('biometric_email');
-      await AsyncStorage.removeItem('biometric_password');
+      await clearBiometricCredentials();
       setHasBiometricCredentials(false);
       Alert.alert('Success', 'Face ID login has been removed.');
     } catch (error) {
@@ -248,7 +252,7 @@ export default function Login({ navigation }) {
     try {
       setIsLoading(true);
       const rnBiometrics = new ReactNativeBiometrics();
-      const storedEmail = await AsyncStorage.getItem('biometric_email');
+      const storedEmail = await getBiometricEmail();
       const { success } = await rnBiometrics.simplePrompt({
         promptMessage: 'Face ID for ' + (storedEmail || 'your account'),
         cancelButtonText: 'Cancel',
