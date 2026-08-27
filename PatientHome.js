@@ -34,6 +34,7 @@ import { loadBpReading } from './bpReading';
 import { drainOutbox } from './outbox';
 import VitalCard from './VitalCard';
 import ReadingReminder from './ReadingReminder';
+import ChartIcon from './ChartIcon';
 
 const NAVY = '#103c63';
 const BRAND = globalStyles.primaryColor.color;
@@ -85,10 +86,11 @@ export default function PatientHome({ navigation }) {
   const reminderItems = ENROLLED_VITALS.map((v) => ({ vital: v, reading: readings[v.key] }));
 
   const NAV_ITEMS = [
-    { key: 'home',     label: 'Home',     icon: require('./assets/home.png'),       route: null, active: true },
-    { key: 'readings', label: 'Readings', icon: require('./assets/graph.png'),      route: 'Readings' },
-    { key: 'messages', label: 'Messages', icon: require('./assets/start_chat.png'), route: 'Connection' },
-    { key: 'profile',  label: 'Profile',  icon: require('./assets/user.png'),       route: 'Profile' },
+    { key: 'home',      label: 'Home',     icon: require('./assets/home.png'),       route: null, active: true },
+    { key: 'readings',  label: 'Readings', IconComponent: ChartIcon,                 route: 'Readings' },
+    { key: 'messages',  label: 'Messages', icon: require('./assets/start_chat.png'), route: 'Connection' },
+    { key: 'profile',   label: 'Profile',  icon: require('./assets/user.png'),       route: 'Profile' },
+    { key: 'education', label: 'Learn',    icon: require('./assets/help.png'),       route: 'Education' },
   ];
 
   return (
@@ -169,11 +171,17 @@ export default function PatientHome({ navigation }) {
             accessibilityLabel={item.label}
             onPress={() => { if (item.route) navigation.navigate(item.route); }}
           >
-            <Image
-              source={item.icon}
-              style={[styles.navIcon, { tintColor: item.active ? BRAND : NAV_INACTIVE }]}
-              resizeMode="contain"
-            />
+            {item.IconComponent ? (
+              <View style={styles.navIcon}>
+                <item.IconComponent size={26} color={item.active ? BRAND : NAV_INACTIVE} />
+              </View>
+            ) : (
+              <Image
+                source={item.icon}
+                style={[styles.navIcon, { tintColor: item.active ? BRAND : NAV_INACTIVE }]}
+                resizeMode="contain"
+              />
+            )}
             <Text style={[styles.navLabel, { color: item.active ? BRAND : NAV_INACTIVE }]}>
               {item.label}
             </Text>

@@ -10,6 +10,7 @@
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		54C78839E63637CF6A357E0C /* libPods-RPM_App.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 12763D3829C831366AC5D5A9 /* libPods-RPM_App.a */; };
 		5F8404762EA2639A00D5C611 /* ViatomO2Manager.m in Sources */ = {isa = PBXBuildFile; fileRef = 5F8404752EA2638C00D5C611 /* ViatomO2Manager.m */; };
+		FA11B0012EA2700100D5C611 /* RPMBrowser.m in Sources */ = {isa = PBXBuildFile; fileRef = FA11B0022EA2700100D5C611 /* RPMBrowser.m */; };
 		733E6666E3ED080209538D76 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
@@ -25,6 +26,8 @@
 		5F7CD98DBF212FB4504F78D3 /* Pods-RPM_App.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RPM_App.release.xcconfig"; path = "Target Support Files/Pods-RPM_App/Pods-RPM_App.release.xcconfig"; sourceTree = "<group>"; };
 		5F8404752EA2638C00D5C611 /* ViatomO2Manager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ViatomO2Manager.m; sourceTree = "<group>"; };
 		5F8404772EA2646100D5C611 /* ViatomO2Manager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ViatomO2Manager.h; sourceTree = "<group>"; };
+		FA11B0022EA2700100D5C611 /* RPMBrowser.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RPMBrowser.m; sourceTree = "<group>"; };
+		FA11B0032EA2700100D5C611 /* RPMBrowser.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RPMBrowser.h; sourceTree = "<group>"; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = RPM_App/AppDelegate.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = RPM_App/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		9B6D9A942E6E2167002A0EA5 /* ViatomDeviceManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ViatomDeviceManager.m; sourceTree = "<group>"; };
@@ -102,6 +105,8 @@
 			children = (
 				5F8404772EA2646100D5C611 /* ViatomO2Manager.h */,
 				5F8404752EA2638C00D5C611 /* ViatomO2Manager.m */,
+				FA11B0032EA2700100D5C611 /* RPMBrowser.h */,
+				FA11B0022EA2700100D5C611 /* RPMBrowser.m */,
 				9B6D9A942E6E2167002A0EA5 /* ViatomDeviceManager.m */,
 				9B6D9A952E6E217C002A0EA5 /* ViatomDeviceManager.h */,
 				9B6D9A962E6E2181002A0EA5 /* RPM_APP-Bridging-Header.h */,
@@ -276,6 +281,7 @@
 			files = (
 				9B6D9A972E6E2294002A0EA5 /* ViatomDeviceManager.m in Sources */,
 				5F8404762EA2639A00D5C611 /* ViatomO2Manager.m in Sources */,
+				FA11B0012EA2700100D5C611 /* RPMBrowser.m in Sources */,
 				761780ED2CA45674006654EE /* AppDelegate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
