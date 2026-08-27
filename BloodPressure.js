@@ -27,6 +27,7 @@ import globalStyles from './globalStyles';
 import ViatomDeviceManager from './ViatomDeviceManager';
 import axios from 'axios';
 import { drainOutbox } from './outbox';
+import ReadingConfirmation from './ReadingConfirmation';
 import { DEV_DATA_BASE } from './apiConfig';
 
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
@@ -457,6 +458,7 @@ const [selectedDevice, setSelectedDevice] = useState(null);
   const [deviceError, setDeviceError] = useState(null);
 
   const [processedResults, setProcessedResults] = useState(new Set());
+  const [confirmation, setConfirmation] = useState(null); // { state:'sent'|'queued', sys, dia } | null
 const processingRef = useRef(false);
 
   // Refs
@@ -841,13 +843,25 @@ const resultSubscription = ViatomDeviceManager.addListener('onMeasurementResult'
   );
 
   drainOutbox()
-    .then(({ sent }) => {
-      if (sent > 0) {
-        console.log(`✅ Outbox delivered ${sent} reading(s)`);
-        loadHistoricalData(filterDays);
-      }
+    .then(async () => {
+      // "Sent" = THIS reading is no longer in the outbox (a confirmed POST), not
+      // merely captured. If it's still queued (offline / POST unconfirmed), show the
+      // "saved, will send" state — never "sent". See ReadingConfirmation.
+      let stillQueued = false;
+      try {
+        const pending = (await ViatomDeviceManager.getPendingResults()) || [];
+        stillQueued = pending.some(
+          (r) => Number(r.systolic) === sys && Number(r.diastolic) === dia && Number(r.pulse) === pulse
+        );
+      } catch (e) {}
+      if (!stillQueued) loadHistoricalData(filterDays);
+      setConfirmation({ state: stillQueued ? 'queued' : 'sent', sys, dia });
     })
-    .catch(err => console.warn('Outbox drain error:', err?.message))
+    .catch((err) => {
+      // Drain threw — the reading is safely captured and queued; reassure, don't claim sent.
+      console.warn('Outbox drain error:', err?.message);
+      setConfirmation({ state: 'queued', sys, dia });
+    })
     .finally(() => {
       setTimeout(() => { processingRef.current = false; }, 2000);
     });
@@ -1704,6 +1718,14 @@ const renderDeviceConnectionModal = () => (
 
       {renderDeviceConnectionModal()}
       {renderFilterModal()}
+
+      <ReadingConfirmation
+        visible={!!confirmation}
+        state={confirmation?.state}
+        systolic={confirmation?.sys}
+        diastolic={confirmation?.dia}
+        onClose={() => setConfirmation(null)}
+      />
 
       {isLoading && (
         <View style={styles.loadingOverlay}>
