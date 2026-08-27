@@ -51,9 +51,9 @@ function ConversationsList({ navigation }) {
 
       const response = await fetch(`${API_BASE}/conversations`, {
         method: 'GET',
+        credentials: 'include', // send the session cookie — the API is authRequired
         headers: {
           'Content-Type': 'application/json',
-          // Cookie: `token=${token}; refresh_token=${refreshToken}`,
         },
       });
 
@@ -93,9 +93,37 @@ function ConversationsList({ navigation }) {
   const navigateToChat = (conversation) => {
     navigation.navigate('Chat', {
       conversationId: conversation.id,
-      receiverId: conversation.participantId || 3,
-      receiverName: conversation.participantName || 'Dr. Amir'
+      receiverId: conversation.participantId,
+      receiverName: conversation.participantName || 'Your care team'
     });
+  };
+
+  // Start a conversation with the patient's assigned care team. Fixes the dead end:
+  // previously the only way to reach the chat input was tapping an EXISTING
+  // conversation, so a new patient (no conversations) could never message anyone.
+  // getCliniciansByPatient scopes to patient_doctor_assignments. One care team for
+  // most patients -> open directly; a picker can come later if any has several.
+  const startNewConversation = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/clinicians`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const json = await response.json();
+      const clinicians = (json && json.data) || [];
+      if (clinicians.length === 0) {
+        Alert.alert('No care team yet', 'We couldn’t find your care team. Please try again later.');
+        return;
+      }
+      const c = clinicians[0];
+      navigation.navigate('Chat', {
+        receiverId: c.id || c.user_id,
+        receiverName: c.name || 'Your care team',
+      });
+    } catch (e) {
+      Alert.alert('Couldn’t connect', 'We couldn’t reach your care team right now. Check your connection and try again.');
+    }
   };
 
   const renderConversation = ({ item }) => (
@@ -170,8 +198,11 @@ function ConversationsList({ navigation }) {
               source={require('./assets/empty_chat.png')}
               style={styles.emptyImage}
             />
-            <Text style={styles.emptyText}>No conversations yet</Text>
-            <Text style={styles.emptySubText}>Start a conversation with your healthcare provider</Text>
+            <Text style={styles.emptyText}>No messages yet</Text>
+            <Text style={styles.emptySubText}>Message your care team any time — they’re here to help.</Text>
+            <TouchableOpacity style={styles.composeBtn} onPress={startNewConversation} accessibilityRole="button">
+              <Text style={styles.composeBtnText}>Message your care team</Text>
+            </TouchableOpacity>
           </View>
         }
       />
@@ -275,9 +306,9 @@ function ChatScreen({ navigation, route }) {
 
       const response = await fetch(url, {
         method: 'GET',
+        credentials: 'include', // send the session cookie — the API is authRequired
         headers: {
           'Content-Type': 'application/json',
-          // Cookie: `token=${token}; refresh_token=${refreshToken};`,
         },
       });
 
@@ -320,9 +351,9 @@ function ChatScreen({ navigation, route }) {
 
       const response = await fetch(`${API_BASE}/send`, {
         method: 'POST',
+        credentials: 'include', // send the session cookie — the API is authRequired
         headers: {
           'Content-Type': 'application/json',
-          // Cookie: `token=${token}; refresh_token=${refreshToken}`,
         },
         body: JSON.stringify({
           receiverId,
@@ -569,7 +600,9 @@ headerTitle: {
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 50, padding: 20 },
   emptyImage: { width: 120, height: 120, marginBottom: 20, opacity: 0.7 },
   emptyText: { fontSize: 18, fontWeight: 'bold', color: '#999', marginBottom: 10, textAlign: 'center' },
-  emptySubText: { fontSize: 14, color: '#999', textAlign: 'center' },
+  emptySubText: { fontSize: 15, color: '#999', textAlign: 'center', lineHeight: 21, paddingHorizontal: 20 },
+  composeBtn: { marginTop: 22, backgroundColor: globalStyles.primaryColor.color, borderRadius: 14, paddingVertical: 15, paddingHorizontal: 26 },
+  composeBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
 
   chatHeader: {
     width: '100%', height: SCREEN_HEIGHT * 0.08,
