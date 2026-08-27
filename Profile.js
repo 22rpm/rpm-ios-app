@@ -16,6 +16,8 @@ import globalStyles from './globalStyles';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { API_BASE } from './apiConfig';
+import MedicationsSection from './MedicationsSection';
+import { SAMPLE_MEDICATIONS } from './medications';
 
 const { width, height } = Dimensions.get('window');
 
@@ -172,20 +174,25 @@ export default function Profile({ navigation }) {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Profile Header */}
-        <View style={styles.profileHeader}>
-          <View style={styles.avatarContainer}>
-            <Image 
-              source={require('./assets/avatar.png')} 
-              style={styles.avatar} 
-            />
+        {/* Compact identity — name + DOB, small avatar. Shrunk so Medications is
+            visible without scrolling; the type stays large. */}
+        <View style={styles.identity}>
+          <Image source={require('./assets/avatar.png')} style={styles.identityAvatar} />
+          <View style={styles.identityText}>
+            <Text style={styles.identityName} numberOfLines={1} allowFontScaling>
+              {userData.firstName} {userData.lastName}
+            </Text>
+            {!!userData.dateOfBirth && (
+              <Text style={styles.identitySub} allowFontScaling>Born {userData.dateOfBirth}</Text>
+            )}
           </View>
-          <Text style={styles.userName}>
-            {userData.firstName} {userData.lastName}
-          </Text>
-          <Text style={styles.userEmail}>{userData.email}</Text>
-          <Text style={styles.userRole}>Role: Patient</Text>
         </View>
+
+        {/* Medications (shell — pitch only; no persistence) */}
+        <MedicationsSection
+          medications={SAMPLE_MEDICATIONS}
+          onAdd={() => navigation.navigate('MedicationCapture')}
+        />
 
         {/* Personal Information */}
         <View style={styles.section}>
@@ -247,6 +254,32 @@ const styles = StyleSheet.create({
     paddingBottom: responsiveSize(20),
     flexGrow: 1,
   },
+  // Compact identity header — replaces the tall centered avatar card so Medications
+  // sits above the fold. Type stays large; only the layout shrank.
+  identity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    margin: 15,
+    borderRadius: 16,
+    padding: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  identityAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 2,
+    borderColor: globalStyles.primaryColor.color,
+    marginRight: 14,
+  },
+  identityText: { flex: 1 },
+  identityName: { fontSize: 22, fontWeight: 'bold', color: '#2c3e50' },
+  identitySub: { fontSize: 16, color: '#7f8c8d', marginTop: 2 },
   profileHeader: {
     alignItems: 'center',
     padding: responsiveSize(20),
