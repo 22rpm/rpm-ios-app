@@ -50,7 +50,13 @@ Patient→clinician messaging. Two branches, both named `fix/messages-e2e`:
 - **A human assigned to monitor + respond** (ops).
 - Remove the remaining `receiverId || 3` fallback in `ChatScreen` once the real
   recipient path is verified.
-- Verify the `getCliniciansByPatient` response shape (assumed `id`/`user_id`, `name`).
+- **RESOLVED (backend `723d984`): `getCliniciansByPatient` is now assignment + active
+  scoped** — it ignored `patientId` and returned every clinician, so a message could
+  route to an arbitrary clinician (misrouted PHI). Now it returns only the patient's
+  own assigned, ACTIVE clinician(s). Empty result (none assigned, or the only one
+  deactivated) → the app shows "Care team not available — please call your clinic",
+  never a silent pick or a blank failure. Still verify the response `id` shape on
+  device.
 
 ## Recommendation for 1.0.50
 Unchanged from the prior analysis: **still pull the Messages tab for 1.0.50.** These

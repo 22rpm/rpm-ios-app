@@ -113,9 +113,19 @@ function ConversationsList({ navigation }) {
       const json = await response.json();
       const clinicians = (json && json.data) || [];
       if (clinicians.length === 0) {
-        Alert.alert('No care team yet', 'We couldn’t find your care team. Please try again later.');
+        // Empty = no ACTIVE assigned clinician: none assigned, or the only one was
+        // deactivated (the backend excludes inactive clinicians, so we never route
+        // to someone who can't see the message). Say so clearly and give a real next
+        // step — never silently pick someone or fail blank. (Deactivation orphan:
+        // ORG_CONTEXT_FOLLOWUPS #6.)
+        Alert.alert(
+          'Care team not available',
+          'Your care team isn’t set up for messages yet. Please call your clinic to reach them.'
+        );
         return;
       }
+      // One of the patient's OWN assigned clinicians (getCliniciansByPatient is now
+      // assignment-scoped). A picker can come later if a patient has several.
       const c = clinicians[0];
       navigation.navigate('Chat', {
         receiverId: c.id || c.user_id,
