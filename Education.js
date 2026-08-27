@@ -79,7 +79,9 @@ export default function Education({ navigation }) {
             title={a.title}
             subtitle={a.subtitle}
             trailing={a.pending ? 'Soon' : '›'}
-            onPress={() => navigation.navigate('Article', { id: a.id })}
+            onPress={() =>
+              a.url ? openInAppBrowser(a.url) : navigation.navigate('Article', { id: a.id })
+            }
           />
         ))}
 

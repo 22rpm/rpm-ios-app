@@ -13,9 +13,10 @@ export const HELP_ARTICLES = [
   {
     id: 'bp-guide',
     title: 'How to take your blood pressure',
-    subtitle: 'Cuff placement, sitting position, and getting an accurate reading',
-    pending: true, // owned content coming separately — slot ready
-    body: null,
+    subtitle: 'Step-by-step: setup, cuff placement, and taking a reading',
+    // Owned guide, already hosted (styled, with step photos + a Spanish version).
+    // Opens in the in-app browser so it's updatable via the website, no app release.
+    url: 'https://twentytwohealth.com/bp-guide/',
   },
   {
     id: 'take-reading',

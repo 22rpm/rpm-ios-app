@@ -65,10 +65,14 @@ recurring cost is the review cadence, not the initial write.
 active voice, no jargon (or jargon defined inline), large type friendly. Validate
 each article's score before sign-off.
 
-## 3. Delivery: backend-served with a bundled fallback — see the build
+## 3. Delivery — BP guide ships via its hosted URL; offline bundle is the follow-up
 
-The BP guide (and future owned articles) should be **served from the backend** so
-content updates don't need an App Store release — BUT with a **bundled fallback
-copy**, because an elderly patient is often offline and a guide that fails to load
-is worse than a stale one. Ship the baked copy, fetch updates when online, cache the
-latest. Details and cost in the build report.
+The BP guide is already published, styled, with step photos + a Spanish version, at
+`https://twentytwohealth.com/bp-guide/` (FK grade 5.6 — good for 65+). v1 opens that
+URL in the in-app browser (SFSafariViewController), so it's updatable by editing the
+website with no App Store release — the backend-served goal, for free.
+
+Open item: it's **online-only**. An elderly patient offline can't load it. Follow-up
+for offline: bundle the guide (HTML + assets, or re-authored native ArticleScreen
+content) as a fallback when the network fails. Same pattern applies to future owned
+articles — hosted/updatable with a bundled fallback.
