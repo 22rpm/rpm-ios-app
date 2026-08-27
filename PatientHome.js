@@ -4,19 +4,21 @@
 // per-vital cards (icon, name, value+unit, real sync pill + relative time),
 // with a hand-rolled bottom nav.
 //
-// WHY ONLY BLOOD PRESSURE RENDERS
-// -------------------------------
-// The card list is written to render an array of ENROLLED vitals, but that array
-// currently holds ONLY `bp`. Per CARE_ACTIVITY_NOTES: `bp` is the sole device
-// type verified against real `dev_data` traffic and seeded `is_active = 1`;
-// glucose/spo2/weight/temperature are seeded `is_active = 0` with an unknown
-// vendor `dev_type`, so a reading for them can't be parsed or trusted yet. The
-// per-patient enrollment source of truth (`rpm_device_setups`) also isn't on prod
-// yet (it lives on `feature/care-activity`). Rendering the other four would mean
-// showing permanent "Waiting…" cards for devices a patient doesn't have — exactly
-// what we were told not to do. When a non-BP vital gets a verified vendor string
-// and enrollment ships, add it to ENROLLED_VITALS (and source that array from the
-// patient's real enrollment) — the rest of this screen already handles N cards.
+// ENROLLED vs SHOWN
+// -----------------
+// All five vitals are SHOWN, but only the ones the patient is enrolled for read as
+// active (full-color icon, live reading, Synced/Waiting pill). The rest are greyed
+// with a neutral "Not set up" — deliberately reading as "not part of your plan,"
+// NOT "broken" or "Waiting…", so a patient with only a cuff never thinks their
+// glucose meter is failing or that they are missing something they were meant to
+// have.
+//
+// `enrolled` is hardcoded to bp-only for now. Per CARE_ACTIVITY_NOTES, `bp` is the
+// only device type verified against real `dev_data` and seeded `is_active = 1`; the
+// others are `is_active = 0` with unverified vendor strings, and the per-patient
+// enrollment table (`rpm_device_setups`) isn't on prod yet (feature/care-activity).
+// When enrollment ships, source each vital's `enrolled` from the patient's real
+// rpm_device_setups rows instead of this constant.
 //
 // NO NEW DEPENDENCIES: solid header (no LinearGradient), hand-rolled tab bar (no
 // @react-navigation/bottom-tabs), PNG assets already in ./assets, Unicode glyphs
@@ -54,15 +56,14 @@ const CARD_BG = '#ffffff';
 const CARD_BORDER = '#e2e6ea';
 const NAV_INACTIVE = '#9aa5ac';
 
-// The only vital we can honestly render today (see header comment).
-const ENROLLED_VITALS = [
-  {
-    key: 'bp',
-    name: 'Blood Pressure',
-    unit: 'mmHg',
-    icon: require('./assets/BP.png'),
-    deviceType: 'bp',
-  },
+// All five vitals are shown; `enrolled` (bp-only for now — see header) controls
+// active vs the greyed "Not set up" treatment. `route` is where an active card goes.
+const ALL_VITALS = [
+  { key: 'bp',      name: 'Blood Pressure', unit: 'mmHg',  icon: require('./assets/BP.png'), enrolled: true,  route: 'BloodPressure' },
+  { key: 'glucose', name: 'Blood Glucose',  unit: 'mg/dL', icon: require('./assets/BG.png'), enrolled: false, route: null },
+  { key: 'spo2',    name: 'Oxygen (SpO₂)',  unit: '%',     icon: require('./assets/OS.png'), enrolled: false, route: null },
+  { key: 'weight',  name: 'Weight',         unit: 'lbs',   icon: require('./assets/W.png'),  enrolled: false, route: null },
+  { key: 'temp',    name: 'Temperature',    unit: '°F',    icon: require('./assets/T.png'),  enrolled: false, route: null },
 ];
 
 // Relative timestamp for elderly-friendly, glanceable freshness.
@@ -166,11 +167,11 @@ export default function PatientHome({ navigation }) {
       } catch (e) {}
 
       const results = {};
-      // Only BP today; loop keeps the shape ready for more vitals.
-      for (const vital of ENROLLED_VITALS) {
-        if (vital.key === 'bp') {
-          results.bp = await loadBP();
-        }
+      // Fetch readings only for enrolled vitals (bp today). The greyed "Not set up"
+      // cards need no data.
+      for (const vital of ALL_VITALS) {
+        if (!vital.enrolled) continue;
+        if (vital.key === 'bp') results.bp = await loadBP();
       }
       setReadings(results);
       setLoading(false);
@@ -228,12 +229,16 @@ export default function PatientHome({ navigation }) {
             <ActivityIndicator size="large" color={BRAND} />
           </View>
         ) : (
-          ENROLLED_VITALS.map((vital) => (
+          ALL_VITALS.map((vital) => (
             <VitalCard
               key={vital.key}
               vital={vital}
               reading={readings[vital.key]}
-              onPress={() => vital.key === 'bp' && navigation.navigate('BloodPressure')}
+              onPress={
+                vital.enrolled && vital.route
+                  ? () => navigation.navigate(vital.route)
+                  : null
+              }
             />
           ))
         )}
@@ -267,14 +272,35 @@ export default function PatientHome({ navigation }) {
 }
 
 function VitalCard({ vital, reading, onPress }) {
+  // Not enrolled: greyed, non-interactive, reads as "not part of your plan" — no
+  // value, no sync pill, just a neutral "Not set up" so nothing looks broken.
+  if (!vital.enrolled) {
+    return (
+      <View
+        style={[styles.card, styles.cardInactive]}
+        accessible
+        accessibilityLabel={`${vital.name}, not set up`}
+      >
+        <Image source={vital.icon} style={[styles.cardIcon, styles.cardIconInactive]} resizeMode="contain" />
+        <View style={styles.cardBody}>
+          <Text style={[styles.cardName, styles.cardNameInactive]} allowFontScaling>
+            {vital.name}
+          </Text>
+        </View>
+        <View style={[styles.pill, styles.pillIdle]}>
+          <Text style={[styles.pillText, styles.pillTextIdle]}>Not set up</Text>
+        </View>
+      </View>
+    );
+  }
+
   const hasReading = !!reading;
   const isWaiting = hasReading && reading.status === 'waiting';
+  const Card = onPress ? TouchableOpacity : View;
 
   return (
-    <TouchableOpacity activeOpacity={0.7} onPress={onPress} style={styles.card}>
-      <View style={styles.cardIconWrap}>
-        <Image source={vital.icon} style={styles.cardIcon} resizeMode="contain" />
-      </View>
+    <Card activeOpacity={0.7} onPress={onPress || undefined} style={styles.card}>
+      <Image source={vital.icon} style={styles.cardIcon} resizeMode="contain" />
 
       <View style={styles.cardBody}>
         <Text style={styles.cardName} allowFontScaling>
@@ -307,7 +333,7 @@ function VitalCard({ vital, reading, onPress }) {
           </View>
         )}
       </View>
-    </TouchableOpacity>
+    </Card>
   );
 }
 
@@ -360,18 +386,15 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
-  cardIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 14,
-    backgroundColor: '#eef4f8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
-  },
-  cardIcon: { width: 30, height: 30, tintColor: BRAND },
+  cardInactive: { backgroundColor: '#f6f7f9' },
+  // Vital icons are finished full-color circular art (white line-art on a teal
+  // gradient). Render as-is: NO tintColor (which flattens them to a solid blob)
+  // and NO background wrapper (they carry their own circle).
+  cardIcon: { width: 48, height: 48, marginRight: 14 },
+  cardIconInactive: { opacity: 0.4 },
   cardBody: { flex: 1 },
   cardName: { fontSize: 17, fontWeight: '600', color: MUTED, marginBottom: 3 },
+  cardNameInactive: { color: '#98a2ac', marginBottom: 0 },
   cardValue: { fontSize: 30, fontWeight: '800', color: INK },
   cardUnit: { fontSize: 16, fontWeight: '600', color: MUTED },
   cardNoData: { fontSize: 18, fontWeight: '600', color: NAV_INACTIVE },
