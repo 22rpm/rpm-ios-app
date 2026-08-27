@@ -8,7 +8,7 @@
 // -----------------
 // All five vitals are SHOWN, but only the ones the patient is enrolled for read as
 // active (full-color icon, live reading, Synced/Waiting pill). The rest are greyed
-// with a neutral "Not set up" — deliberately reading as "not part of your plan,"
+// with a neutral "Not included" — deliberately reading as "not part of your plan,"
 // NOT "broken" or "Waiting…", so a patient with only a cuff never thinks their
 // glucose meter is failing or that they are missing something they were meant to
 // have.
@@ -57,7 +57,7 @@ const CARD_BORDER = '#e2e6ea';
 const NAV_INACTIVE = '#9aa5ac';
 
 // All five vitals are shown; `enrolled` (bp-only for now — see header) controls
-// active vs the greyed "Not set up" treatment. `route` is where an active card goes.
+// active vs the greyed "Not included" treatment. `route` is where an active card goes.
 const ALL_VITALS = [
   { key: 'bp',      name: 'Blood Pressure', unit: 'mmHg',  icon: require('./assets/BP.png'), enrolled: true,  route: 'BloodPressure' },
   { key: 'glucose', name: 'Blood Glucose',  unit: 'mg/dL', icon: require('./assets/BG.png'), enrolled: false, route: null },
@@ -167,7 +167,7 @@ export default function PatientHome({ navigation }) {
       } catch (e) {}
 
       const results = {};
-      // Fetch readings only for enrolled vitals (bp today). The greyed "Not set up"
+      // Fetch readings only for enrolled vitals (bp today). The greyed "Not included"
       // cards need no data.
       for (const vital of ALL_VITALS) {
         if (!vital.enrolled) continue;
@@ -273,13 +273,13 @@ export default function PatientHome({ navigation }) {
 
 function VitalCard({ vital, reading, onPress }) {
   // Not enrolled: greyed, non-interactive, reads as "not part of your plan" — no
-  // value, no sync pill, just a neutral "Not set up" so nothing looks broken.
+  // value, no sync pill, just a neutral "Not included" so nothing looks broken.
   if (!vital.enrolled) {
     return (
       <View
         style={[styles.card, styles.cardInactive]}
         accessible
-        accessibilityLabel={`${vital.name}, not set up`}
+        accessibilityLabel={`${vital.name}, not included`}
       >
         <Image source={vital.icon} style={[styles.cardIcon, styles.cardIconInactive]} resizeMode="contain" />
         <View style={styles.cardBody}>
@@ -288,7 +288,7 @@ function VitalCard({ vital, reading, onPress }) {
           </Text>
         </View>
         <View style={[styles.pill, styles.pillIdle]}>
-          <Text style={[styles.pillText, styles.pillTextIdle]}>Not set up</Text>
+          <Text style={[styles.pillText, styles.pillTextIdle]}>Not included</Text>
         </View>
       </View>
     );
