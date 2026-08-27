@@ -544,16 +544,24 @@ const loadHistoricalData = async (days = 7) => {
   try {
     setIsLoading(true);
     const data = await fetchHistoricalData(days);
-    const formattedData = data.map(item => ({
-      id: item.id,
-      date: new Date(item.createdAt).toLocaleDateString(),
-      time: new Date(item.createdAt).toLocaleTimeString(),
-      systolic: item.data.systolic,
-      diastolic: item.data.diastolic,
-      bpm: item.data.pulse,
-      mean: item.data.mean,
-      timestamp: item.createdAt
-    }));
+    const formattedData = data.map(item => {
+      // Reading time = data.timestamp (native iso8601Now, a UTC "…Z" JSON string,
+      // immune to the created_at TIMESTAMP tz mislabel — see bpReading.js /
+      // TZ_FIX_DESIGN). createdAt is the outbox DELIVERY time, served ~7h off on dev;
+      // fall back to it only for a legacy row. Also drives the sort, so history orders
+      // by when the reading was TAKEN, not when it was delivered.
+      const readingAt = (item.data && item.data.timestamp) || item.createdAt;
+      return {
+        id: item.id,
+        date: new Date(readingAt).toLocaleDateString(),
+        time: new Date(readingAt).toLocaleTimeString(),
+        systolic: item.data.systolic,
+        diastolic: item.data.diastolic,
+        bpm: item.data.pulse,
+        mean: item.data.mean,
+        timestamp: readingAt,
+      };
+    });
     
     // Sort by timestamp in descending order (newest first) when loading
     const sortedData = formattedData.sort((a, b) => {
