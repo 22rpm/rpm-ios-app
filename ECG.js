@@ -156,7 +156,10 @@ const Ecg = ({ navigation }) => {
     }
   };
 
-  const handleBack = () => navigation?.navigate?.('Home');
+  // goBack() returns to the actual previous screen; hardcoding 'Home' pushed the
+  // OLD home on top of the stack (wrong when reached from PatientHome).
+  const handleBack = () =>
+    navigation?.canGoBack?.() ? navigation.goBack() : navigation?.navigate?.('Home');
 
   // UI Components
   const renderConnectionStatus = () => (
