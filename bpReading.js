@@ -47,7 +47,14 @@ export async function loadBpReading() {
     );
     if (res.data && res.data.success && res.data.data) {
       const v = res.data.data.data || {};
-      const at = res.data.data.createdAt;
+      // Reading time = data.timestamp (native iso8601Now: a UTC "…Z" string stored as
+      // JSON, so it's immune to the tz mishandling). `createdAt` is the outbox DELIVERY
+      // time, not the reading time — wrong field, AND served ~7h off on the dev box
+      // (Pacific SYSTEM session + config/db.js `timezone:'Z'` mislabels the TIMESTAMP).
+      // On prod (UTC session) the 7h is invisible for immediate deliveries, but a
+      // reading taken offline and delivered later still shows the delivery time. Fall
+      // back to createdAt only for a legacy row with no baked timestamp.
+      const at = v.timestamp || res.data.data.createdAt;
       if (v.systolic != null && v.diastolic != null) {
         return {
           value: `${v.systolic}/${v.diastolic}`,
