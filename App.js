@@ -20,6 +20,7 @@ import PrivacySecurity from './PrivacySecurityScreen';
 import AboutApp from './AboutAppScreen';
 import Oxygen from './Oxygen';
 import PatientHome from './PatientHome';
+import Readings from './Readings';
 import { drainOutbox } from './outbox';
 
 import { API_BASE } from './apiConfig';
@@ -176,6 +177,7 @@ export default function App() {
             calls to 'PatientHome' (or swap this component onto the "Home" route).
             Left dormant so it does not ride the 1.0.50 release unreviewed. */}
         <Stack.Screen name="PatientHome" component={PatientHome} />
+        <Stack.Screen name="Readings" component={Readings} />
         <Stack.Screen name="BloodPressure" component={BloodPressure} />
         <Stack.Screen name="Oxygen" component={Oxygen} />
         <Stack.Screen name='ECG' component={ECG}/>
