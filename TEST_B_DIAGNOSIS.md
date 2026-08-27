@@ -1,5 +1,22 @@
 # Test B regression diagnosis (cuff off mid-session → lockout) — on fix/bp-auto-reconnect
 
+## RESOLUTION (2026-08-28) — NOT a regression; the "prime suspect" below was WRONG
+
+Test B was re-run on the device on **both DEBUG and RELEASE builds**: screen
+responsive, back button works, **no lockout either way**. The "prime suspect" below —
+that gating the BLE-callback logging out of RELEASE changed timing and unmasked a race
+— **does not hold** (a release build shows no lockout). The earlier "screen lags,
+can't back out" report is therefore **UNREPRODUCED, not fixed**: there is no confirmed
+root cause and no code change was made for it, and it did not recur on either build.
+The reconnect logic is byte-identical to the verified-passing `6f70ef8` state. If it
+ever recurs, capture a device trace — do not resurrect the logging-timing theory
+without evidence.
+
+_The original investigation is kept below for the record, but its "prime suspect" is
+disproven; read it as history, not a live hypothesis._
+
+---
+
 Test B passed at `6f70ef8` (reconnect cadence fix). It is reported failing again on
 the same branch (now 1.0.50). This is the diagnosis from code inspection; the
 isolating test needs the device.

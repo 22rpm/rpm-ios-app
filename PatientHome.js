@@ -88,7 +88,8 @@ export default function PatientHome({ navigation }) {
   const NAV_ITEMS = [
     { key: 'home',      label: 'Home',     icon: require('./assets/home.png'),       route: null, active: true },
     { key: 'readings',  label: 'Readings', IconComponent: ChartIcon,                 route: 'Readings' },
-    { key: 'messages',  label: 'Messages', icon: require('./assets/start_chat.png'), route: 'Connection' },
+    // Messages PULLED from 1.0.50 — the Connection.js fix is on fix/messages-e2e,
+    // held until the clinician side is live + monitored. Re-add when Messages ships.
     { key: 'profile',   label: 'Profile',  icon: require('./assets/user.png'),       route: 'Profile' },
     { key: 'education', label: 'Learn',    icon: require('./assets/help.png'),       route: 'Education' },
   ];

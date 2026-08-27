@@ -50,7 +50,10 @@ const allowedSelectable = ['bp', 'SpO2', 'ECG'];
 // Menu options data
 const menuOptions = [
   { id: 'profile', text: 'Profile', navigation: 'Profile' },
-  { id: 'connection', text: 'Chat', navigation: 'Connection'},
+  // Messages/Chat PULLED from 1.0.50 — Connection.js is unfixed on this branch (the
+  // fix lives on fix/messages-e2e, held until the clinician side is live + monitored).
+  // Re-add when Messages ships so patients don't type into a void. See Train B.
+  // { id: 'connection', text: 'Chat', navigation: 'Connection'},
   { id: 'settings', text: 'Setting', navigation: 'Settings' },
   { id: 'logout', text: 'Logout', navigation: 'Login' }
 ];
