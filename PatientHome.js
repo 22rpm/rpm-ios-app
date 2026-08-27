@@ -21,6 +21,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
+  ImageBackground,
   ActivityIndicator,
   RefreshControl,
   StatusBar,
@@ -92,21 +93,39 @@ export default function PatientHome({ navigation }) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" backgroundColor={NAVY} />
+      <StatusBar barStyle="dark-content" />
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BRAND} />}
       >
-        {/* Hero header — solid navy band, no photo. */}
-        <View style={styles.hero}>
-          <Text style={styles.heroGreeting} allowFontScaling>
-            Hello{firstName ? ` ${firstName}` : ''} <Text style={styles.wave}>👋</Text>
-          </Text>
-          <Text style={styles.heroSubtitle} allowFontScaling>
-            Your readings sync automatically
-          </Text>
-        </View>
+        {/* Hero header — provider illustration (she's in the right ~40%). The
+            greeting sits in the clear left ~55% in dark navy (#0d2f49 = 7.7:1 on
+            the pale teal). No scrim: a scrim dark enough for white text at high
+            contrast would read as a black box on a light background. The text box
+            is capped at 55% width — proportional, so it clears her at every phone
+            width (she starts at 60%). */}
+        <ImageBackground
+          source={require('./assets/dr_image_22_rpm_app.png')}
+          style={styles.hero}
+          imageStyle={styles.heroImage}
+          resizeMode="cover"
+        >
+          <View style={styles.heroTextWrap}>
+            <Text
+              style={styles.heroGreeting}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.8}
+              allowFontScaling
+            >
+              Hello{firstName ? ` ${firstName}` : ''} 👋
+            </Text>
+            <Text style={styles.heroSubtitle} numberOfLines={2} allowFontScaling>
+              Your readings sync automatically
+            </Text>
+          </View>
+        </ImageBackground>
 
         {/* Reading reminder — prompt or done state, per enrolled vital. */}
         {!loading && (
@@ -170,16 +189,19 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 24 },
 
   hero: {
-    backgroundColor: NAVY,
-    paddingHorizontal: 24,
-    paddingTop: 28,
-    paddingBottom: 34,
+    width: '100%',
+    aspectRatio: 1568 / 523, // the banner's native 3:1 — full width, no crop
+    justifyContent: 'center',
+    overflow: 'hidden',
     borderBottomLeftRadius: 26,
     borderBottomRightRadius: 26,
   },
-  heroGreeting: { color: '#ffffff', fontSize: 32, fontWeight: '800', letterSpacing: 0.2 },
-  wave: { fontSize: 30 },
-  heroSubtitle: { color: 'rgba(255,255,255,0.88)', fontSize: 17, marginTop: 8, fontWeight: '500' },
+  heroImage: { borderBottomLeftRadius: 26, borderBottomRightRadius: 26 },
+  // Capped at 55% of the header width so the greeting always clears her (she
+  // starts at 60%), on any phone, without per-device math.
+  heroTextWrap: { maxWidth: '55%', paddingLeft: 24 },
+  heroGreeting: { color: '#0d2f49', fontSize: 28, fontWeight: '800', letterSpacing: 0.2 },
+  heroSubtitle: { color: '#0d2f49', fontSize: 14, fontWeight: '600', marginTop: 6 },
 
   sectionHeaderRow: {
     flexDirection: 'row',
