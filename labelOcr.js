@@ -1,23 +1,25 @@
-// labelOcr.js — capture a medication-bottle label, read it ON-DEVICE, and DISCARD the
-// image immediately (medications step 5). Nothing is stored:
+// labelOcr.js — capture a medication-bottle label, read it ON-DEVICE with Apple's
+// Vision framework, and DISCARD the image immediately (medications step 5).
+//
+// Nothing is stored:
 //   - launchCamera with saveToPhotos:false  -> the photo is NOT added to the camera roll
-//   - ML Kit text recognition runs fully on-device  -> the image never leaves the phone
-//   - the temp file is unlinked in a `finally`  -> deleted right after the read, even on error
-// The document_key / document_sha256 columns stay unused (they wait on S3).
+//   - the native MedLabelOCR module (Vision) reads the file on-device and DELETES it in
+//     native code, success or failure  -> the image never leaves the phone and is not kept
+//   - document_key / document_sha256 stay unused (they wait on S3)
 //
-// The OUTPUT is only a best-effort DRAFT the patient must review and correct before
-// submitting — OCR misreads drug names and strengths, and a plausible wrong number
-// (25 -> 250) cannot be caught here. Correctness comes from the patient confirming the
-// draft, then a clinician confirming the entry. This function never saves anything to
-// the record; it only returns fields to pre-fill the entry form.
+// OCR is a convenience, not a shortcut past review: the OUTPUT is only a best-effort
+// DRAFT the patient must review and correct before submitting. A plausible wrong number
+// (25 -> 250) cannot be caught here — correctness comes from the patient confirming the
+// draft, then a clinician confirming the entry.
 //
-// Requires native modules (installed as part of the device build):
-//   react-native-image-picker, @react-native-ml-kit/text-recognition, react-native-fs
-// plus NSCameraUsageDescription in ios Info.plist. See MEDICATIONS_FOLLOWUPS.md.
+// Camera: react-native-image-picker (a reasonable dependency). OCR: no JS dependency —
+// the native module MedLabelOCR (ios/VTMDeviceManager/MedLabelOCR.{h,m}) must be added
+// to the Xcode target and the app rebuilt. See MEDICATIONS_FOLLOWUPS.md.
 
+import { NativeModules } from 'react-native';
 import { launchCamera } from 'react-native-image-picker';
-import TextRecognition from '@react-native-ml-kit/text-recognition';
-import RNFS from 'react-native-fs';
+
+const { MedLabelOCR } = NativeModules;
 
 // Pull a strength like "10 mg" out of recognized text.
 function parseStrength(text) {
@@ -34,24 +36,20 @@ function parseName(text) {
     .map((l) => l.trim())
     .filter((l) => l.length >= 4 && /[a-z]{4,}/i.test(l) && !NOISE.test(l));
   if (!lines.length) return '';
-  // Prefer a line with letters but not mostly digits; pick the longest such.
   lines.sort((a, b) => b.length - a.length);
   return lines[0].slice(0, 120);
 }
 
-async function discard(uri) {
-  if (!uri) return;
-  try {
-    const path = uri.replace(/^file:\/\//, '');
-    if (await RNFS.exists(path)) await RNFS.unlink(path);
-  } catch {
-    /* best-effort delete; never surface a cleanup failure to the patient */
-  }
-}
-
-// Launch the camera, read the label on-device, discard the image, and return a draft.
-// Returns { cancelled } if the user backs out, or { draft: { drug_name, dose } }.
+// Launch the camera, read the label on-device, discard the image (in native), and return
+// a draft. Returns { cancelled } if the user backs out, or { draft: { drug_name, dose } }.
 export async function captureAndReadLabel() {
+  if (!MedLabelOCR || typeof MedLabelOCR.recognize !== 'function') {
+    // Native module not present (not added to the target / not rebuilt yet).
+    const e = new Error('On-device label reading is not available on this build.');
+    e.code = 'ocr_unavailable';
+    throw e;
+  }
+
   const result = await launchCamera({
     mediaType: 'photo',
     saveToPhotos: false, // do NOT add to the camera roll
@@ -69,19 +67,15 @@ export async function captureAndReadLabel() {
   const uri = asset?.uri;
   if (!uri) return { cancelled: true };
 
-  try {
-    const recognized = await TextRecognition.recognize(uri);
-    const text = recognized?.text || '';
-    return {
-      draft: {
-        drug_name: parseName(text),
-        dose: parseStrength(text),
-        rxcui: null,
-        source: 'photo',
-      },
-    };
-  } finally {
-    // Discard the image immediately — success or failure.
-    await discard(uri);
-  }
+  // The native module reads the file AND deletes it — the image is gone after this call.
+  const text = await MedLabelOCR.recognize(uri);
+
+  return {
+    draft: {
+      drug_name: parseName(text),
+      dose: parseStrength(text),
+      rxcui: null,
+      source: 'photo',
+    },
+  };
 }

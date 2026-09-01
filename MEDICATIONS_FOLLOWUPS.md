@@ -7,31 +7,38 @@ free text, or photo-read — arrives `unconfirmed` and goes through clinician re
 
 ## 0. Step 5 (photo → OCR → draft) needs a native build — do this before device testing
 
-The photo path reads the label ON-DEVICE and discards the image immediately; nothing is
-stored (no camera roll, no upload; `document_key`/`document_sha256` stay unused until
-S3). It depends on three native modules that must be installed and the app rebuilt:
+The photo path reads the label ON-DEVICE with **Apple's Vision framework** and discards
+the image immediately; nothing is stored (no camera roll, no upload;
+`document_key`/`document_sha256` stay unused until S3). OCR has **zero JS dependencies** —
+it's a native Objective-C module using Vision. Only the camera is a JS dependency.
 
+**Build steps:**
 ```
-npm install
-cd ios && pod install && cd ..
-# then rebuild the app (Xcode or: npx react-native run-ios)
+npm install                         # installs react-native-image-picker (camera)
+cd ios && pod install && cd ..      # links image-picker's native code
+# Add the Vision OCR module to the Xcode target (one-time):
+#   In Xcode, add ios/VTMDeviceManager/MedLabelOCR.h and MedLabelOCR.m to the
+#   RPM_App target (they sit next to RPMBrowser.m; "Add Files to RPM_App…", ensure
+#   RPM_App target membership is checked). Vision.framework is a system framework and
+#   links automatically — no Podfile change.
+# then rebuild (Xcode or: npx react-native run-ios)
 ```
 
-Added to `package.json`: `react-native-image-picker` (OS camera, `saveToPhotos:false`),
-`@react-native-ml-kit/text-recognition` (on-device OCR, no network), `react-native-fs`
-(unlink the temp image). `NSCameraUsageDescription` is already added to
-`ios/RPM_App/Info.plist`. Until `pod install` + rebuild is done, the app will not bundle
-(Metro resolves the new imports) — this is expected; it's a native step, not a JS one.
+`NSCameraUsageDescription` is already in `ios/RPM_App/Info.plist`. The JS bundle builds
+without the native module (labelOcr.js guards on `NativeModules.MedLabelOCR` and degrades
+to "type it in instead"); the OCR activates once the two files are added to the target and
+the app is rebuilt.
 
-Files: `labelOcr.js` (capture + OCR + discard), `MedicationCapture.js` (the scan
-screen, with the "photo isn't saved" line), and the draft banner in
-`MedicationEntryScreen.js`. The OCR parse is best-effort — a misread strength cannot be
-caught by the app; the patient corrects the draft and a clinician confirms the entry.
-See concern #1 below.
+Files: `labelOcr.js` (camera + calls the native OCR + parse), `MedLabelOCR.{h,m}` (Vision
+OCR + deletes the file in native — the "nothing is stored" guarantee lives here),
+`MedicationCapture.js` (the scan screen, with the "photo isn't saved" line), and the draft
+banner in `MedicationEntryScreen.js`. The OCR parse is best-effort — a misread strength
+cannot be caught by the app; the patient corrects the draft and a clinician confirms the
+entry. See concern #1 below.
 
-Android note: ML Kit text recognition also supports Android, but this build only wired
-iOS (`Info.plist`). Add the Android camera permission + ML Kit setup when that surface
-is built.
+Android note: this build wired iOS only (Vision is Apple-only). When Android is built, it
+needs its own on-device OCR (e.g. ML Kit) behind the same `labelOcr.js` interface, plus
+the Android camera permission.
 
 ## 1. Label OCR is not trustworthy for a clinical record — human verification is required
 
