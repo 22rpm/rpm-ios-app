@@ -46,18 +46,26 @@ function ndcCandidatesFromBarcode(payload) {
 
 const NDC_TEXT = /\b\d{4,5}-\d{3,4}-\d{1,2}\b/; // the printed NDC format
 
+// Only an ACTIVE NDC counts as a match. An obsolete concept resolving as though it were
+// a real drug is exactly the silently-wrong-but-confident case we design against — a
+// patient wouldn't know to question it. An inactive (or unresolved) NDC is treated as
+// no match, so we fall through to the line picker and the patient chooses.
+function isUsable(r) {
+  return !!(r && r.name && r.active);
+}
+
 async function resolveNdc(barcodes, lines) {
   for (const b of barcodes || []) {
     for (const cand of ndcCandidatesFromBarcode(b.payload)) {
       const r = await lookupNdc(cand);
-      if (r && r.name) return r;
+      if (isUsable(r)) return r;
     }
   }
   for (const ln of lines || []) {
     const m = ln.match(NDC_TEXT);
     if (m) {
       const r = await lookupNdc(m[0]);
-      if (r && r.name) return r;
+      if (isUsable(r)) return r;
     }
   }
   return null;
