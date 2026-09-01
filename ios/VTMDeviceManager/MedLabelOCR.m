@@ -26,6 +26,9 @@ static void DiscardFile(NSString *filePath) {
   [[NSFileManager defaultManager] removeItemAtPath:filePath error:nil];
 }
 
+// Reads BOTH a barcode (preferred — an NDC barcode maps to an exact product) and the
+// text lines (fallback — shown to the patient to pick from; we never guess the name).
+// Returns { "barcodes": [{payload, symbology}], "lines": [String] }.
 RCT_EXPORT_METHOD(recognize:(NSString *)path
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
@@ -39,33 +42,47 @@ RCT_EXPORT_METHOD(recognize:(NSString *)path
     return;
   }
 
-  VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] initWithCompletionHandler:nil];
-  request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
-  request.usesLanguageCorrection = YES;
+  VNDetectBarcodesRequest *barcodeReq =
+    [[VNDetectBarcodesRequest alloc] initWithCompletionHandler:nil];
+
+  VNRecognizeTextRequest *textReq =
+    [[VNRecognizeTextRequest alloc] initWithCompletionHandler:nil];
+  textReq.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+  textReq.usesLanguageCorrection = YES;
 
   VNImageRequestHandler *handler =
     [[VNImageRequestHandler alloc] initWithCGImage:image.CGImage options:@{}];
 
   NSError *error = nil;
-  BOOL ok = [handler performRequests:@[request] error:&error];
+  BOOL ok = [handler performRequests:@[barcodeReq, textReq] error:&error];
 
   // Discard immediately, before returning anything.
   DiscardFile(filePath);
 
   if (!ok || error != nil) {
-    reject(@"ocr_failed", error.localizedDescription ?: @"Text recognition failed.", error);
+    reject(@"ocr_failed", error.localizedDescription ?: @"Recognition failed.", error);
     return;
   }
 
+  NSMutableArray *barcodes = [NSMutableArray array];
+  for (VNBarcodeObservation *obs in barcodeReq.results) {
+    if (obs.payloadStringValue.length > 0) {
+      [barcodes addObject:@{
+        @"payload": obs.payloadStringValue,
+        @"symbology": obs.symbology ?: @"",
+      }];
+    }
+  }
+
   NSMutableArray<NSString *> *lines = [NSMutableArray array];
-  for (VNRecognizedTextObservation *observation in request.results) {
+  for (VNRecognizedTextObservation *observation in textReq.results) {
     VNRecognizedText *best = [[observation topCandidates:1] firstObject];
     if (best.string.length > 0) {
       [lines addObject:best.string];
     }
   }
 
-  resolve([lines componentsJoinedByString:@"\n"]);
+  resolve(@{ @"barcodes": barcodes, @"lines": lines });
 }
 
 @end

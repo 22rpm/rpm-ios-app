@@ -22,17 +22,27 @@ const INK = '#1f2d3d';
 const MUTED = '#5b6b7a';
 const BORDER = '#c7d0d8';
 
-// Pull a strength like "10 mg" out of an RxNorm name for a convenience pre-fill.
-function extractDose(name) {
-  const m = (name || '').match(/(\d+(?:\.\d+)?)\s?(mg|mcg|g|ml|%|units?|iu)\b/i);
-  return m ? `${m[1]} ${m[2].toLowerCase()}` : '';
-}
-// Pull the dose form (e.g., "Oral Tablet") — the text after the strength, minus any
-// [Brand] bracket.
+// Closed lists patients tap instead of typing (free text still available below each).
+const FORM_OPTIONS = ['Tablet', 'Capsule', 'Liquid', 'Inhaler', 'Injection', 'Patch', 'Drops', 'Cream'];
+const FREQ_OPTIONS = [
+  'Once a day', 'Twice a day', '3 times a day', '4 times a day',
+  'Every morning', 'At bedtime', 'As needed', 'Every other day', 'Weekly',
+];
+
+// Pull the dose form (e.g., "Oral Tablet") from an RxNorm name — the text after the
+// strength, minus any [Brand] bracket. NOTE: strength is intentionally NOT extracted
+// into the dose field — the manufactured strength is not the patient's dose.
 function extractForm(name) {
   const cleaned = (name || '').replace(/\[[^\]]*\]/g, '').trim();
   const m = cleaned.match(/(?:\d+(?:\.\d+)?)\s?(?:mg|mcg|g|ml|%|units?|iu)\b\s*(.*)$/i);
   return m && m[1] ? m[1].trim() : '';
+}
+// Snap an extracted form phrase ("Oral Capsule") to a chip ("Capsule") when possible,
+// so the picker highlights it; otherwise keep the raw text (shown in the free-text box).
+function normalizeForm(text) {
+  if (!text) return '';
+  const hit = FORM_OPTIONS.find((o) => text.toLowerCase().includes(o.toLowerCase()));
+  return hit || text;
 }
 
 export default function MedicationEntryScreen({ navigation, route }) {
@@ -43,7 +53,7 @@ export default function MedicationEntryScreen({ navigation, route }) {
   const [name, setName] = useState(src.drug_name || '');
   const [rxcui, setRxcui] = useState(src.rxcui || null);
   const [dose, setDose] = useState(src.dose || '');
-  const [form, setForm] = useState(src.route || '');
+  const [form, setForm] = useState(normalizeForm(src.route || ''));
   const [frequency, setFrequency] = useState(src.frequency || '');
   const [instructions, setInstructions] = useState(src.admin_instructions || '');
   const [pharmacyName, setPharmacyName] = useState(src.pharmacy_name || '');
@@ -52,17 +62,26 @@ export default function MedicationEntryScreen({ navigation, route }) {
   // draft" banner and marks source='photo' on submit (provenance; stays set through
   // the patient's corrections, since they're correcting a photo-originated draft).
   const [fromPhoto, setFromPhoto] = useState(!!draft);
+  // Recognized text lines to PICK a name from when no NDC was found (no guessing).
+  const [lines, setLines] = useState(route?.params?.textLines || []);
 
-  // A returning photo scan updates route.params.draft on this (already-mounted) screen;
-  // apply it to the form.
+  // A returning photo scan updates this already-mounted screen's params. An NDC draft
+  // fills name / rxcui / form ONLY — dose and frequency stay for the patient (the
+  // manufactured strength is not the patient's dose).
   useEffect(() => {
     const d = route?.params?.draft;
     if (!d) return;
     if (d.drug_name != null) setName(d.drug_name);
-    if (d.dose != null) setDose(d.dose);
-    setRxcui(null);
+    setRxcui(d.rxcui || null);
+    if (d.route) setForm(normalizeForm(d.route));
     setFromPhoto(true);
+    setLines([]);
   }, [route?.params?.draft]);
+
+  useEffect(() => {
+    const tl = route?.params?.textLines;
+    if (tl) setLines(tl);
+  }, [route?.params?.textLines]);
 
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -90,12 +109,17 @@ export default function MedicationEntryScreen({ navigation, route }) {
   const pickResult = (item) => {
     setName(item.name);
     setRxcui(item.rxcui || null);
-    const d = extractDose(item.name);
+    // Pre-fill FORM from the concept name; never the dose (strength != dose).
     const f = extractForm(item.name);
-    if (d) setDose(d);
-    if (f) setForm(f);
+    if (f) setForm(normalizeForm(f));
     setShowResults(false);
     setResults([]);
+  };
+
+  // Patient taps the recognized line that is the drug name (photo, no-NDC path).
+  const pickLine = (line) => {
+    setLines([]);
+    onChangeName(line); // sets the name and triggers a search so a match can attach
   };
 
   const back = () => (navigation?.canGoBack?.() ? navigation.goBack() : navigation.navigate('Profile'));
@@ -152,14 +176,15 @@ export default function MedicationEntryScreen({ navigation, route }) {
             </View>
           )}
 
-          {/* Photo draft: everything here still needs the patient's review before it's
-              saved — a misread strength must be caught here, not after. */}
+          {/* Photo draft: the medication came from the bottle, but the patient still
+              sets — and must review — how much they take and how often. */}
           {fromPhoto && (
             <View style={styles.photoBanner}>
-              <Text style={styles.photoBannerTitle} allowFontScaling>Filled in from your photo</Text>
+              <Text style={styles.photoBannerTitle} allowFontScaling>Filled in from your bottle</Text>
               <Text style={styles.photoBannerBody} allowFontScaling>
-                Please check each field — especially the dose — and fix anything that isn’t
-                right before you save.
+                We read the medication from your bottle. Now set how much you take and how
+                often — we left those blank on purpose, because only you know what you were
+                told to take. Check the name too.
               </Text>
             </View>
           )}
@@ -175,6 +200,30 @@ export default function MedicationEntryScreen({ navigation, route }) {
                 {fromPhoto ? '📷  Scan the label again' : '📷  Scan the label instead'}
               </Text>
             </TouchableOpacity>
+          )}
+
+          {/* No barcode/NDC: show the recognized lines and let the patient pick the name.
+              We never guess it. */}
+          {lines.length > 0 && !name.trim() && (
+            <View style={styles.linePick}>
+              <Text style={styles.linePickTitle} allowFontScaling>
+                Which line is the medication name?
+              </Text>
+              {lines.slice(0, 12).map((ln, i) => (
+                <TouchableOpacity
+                  key={i}
+                  style={styles.lineItem}
+                  onPress={() => pickLine(ln)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Use ${ln}`}
+                >
+                  <Text style={styles.lineItemText} allowFontScaling>{ln}</Text>
+                </TouchableOpacity>
+              ))}
+              <Text style={styles.linePickHint} allowFontScaling>
+                None of these? Type the name below instead.
+              </Text>
+            </View>
           )}
 
           <Text style={styles.label} allowFontScaling>Medication name</Text>
@@ -213,9 +262,14 @@ export default function MedicationEntryScreen({ navigation, route }) {
             Pick your medication from the list if you see it. If it isn't there, just type the name — that's fine.
           </Text>
 
-          <Field label="Dose (for example, 10 mg)" value={dose} onChange={setDose} placeholder="10 mg" />
-          <Field label="Form (for example, tablet)" value={form} onChange={setForm} placeholder="Tablet by mouth" />
-          <Field label="How often (for example, once a day)" value={frequency} onChange={setFrequency} placeholder="Once a day" />
+          <Field
+            label="How much you take each time"
+            value={dose}
+            onChange={setDose}
+            placeholder="For example: 1 tablet, or half a tablet"
+          />
+          <PickerField label="Form" value={form} onChange={setForm} options={FORM_OPTIONS} placeholder="Other — type the form" />
+          <PickerField label="How often" value={frequency} onChange={setFrequency} options={FREQ_OPTIONS} placeholder="Other — type how often" />
           <Field label="Special instructions (optional)" value={instructions} onChange={setInstructions} placeholder="With food" multiline />
           <Field label="Pharmacy name (optional)" value={pharmacyName} onChange={setPharmacyName} placeholder="Your pharmacy" />
           <Field label="Pharmacy phone (optional)" value={pharmacyPhone} onChange={setPharmacyPhone} placeholder="(555) 555-5555" keyboardType="phone-pad" />
@@ -264,6 +318,44 @@ function Field({ label, value, onChange, placeholder, multiline, keyboardType })
   );
 }
 
+// A closed list the patient TAPS, with a free-text box as a fallback. The value is one
+// string: tapping a chip fills it, and they can always type instead.
+function PickerField({ label, value, onChange, options, placeholder }) {
+  return (
+    <>
+      <Text style={styles.label} allowFontScaling>{label}</Text>
+      <View style={styles.chipRow}>
+        {options.map((opt) => {
+          const selected = value === opt;
+          return (
+            <TouchableOpacity
+              key={opt}
+              style={[styles.chip, selected && styles.chipSelected]}
+              onPress={() => onChange(selected ? '' : opt)}
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              accessibilityLabel={opt}
+            >
+              <Text style={[styles.chipText, selected && styles.chipTextSelected]} allowFontScaling>
+                {opt}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <TextInput
+        style={[styles.input, styles.chipInput]}
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor={MUTED}
+        allowFontScaling
+        accessibilityLabel={`${label} — or type your own`}
+      />
+    </>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f4f7f9' },
   header: {
@@ -283,6 +375,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 14, fontSize: 18, color: INK, minHeight: 52,
   },
   inputMultiline: { minHeight: 80, textAlignVertical: 'top' },
+
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
+  chip: {
+    borderWidth: 1.5, borderColor: BORDER, borderRadius: 999, backgroundColor: '#fff',
+    paddingHorizontal: 16, paddingVertical: 12, minHeight: 44, justifyContent: 'center',
+  },
+  chipSelected: { backgroundColor: BRAND, borderColor: BRAND },
+  chipText: { fontSize: 16, fontWeight: '600', color: INK },
+  chipTextSelected: { color: '#fff' },
+  chipInput: { marginTop: 2 },
+
+  linePick: {
+    backgroundColor: '#fff', borderWidth: 1.5, borderColor: BRAND, borderRadius: 12,
+    padding: 14, marginBottom: 6,
+  },
+  linePickTitle: { fontSize: 17, fontWeight: '800', color: INK, marginBottom: 8 },
+  lineItem: {
+    borderTopWidth: 1, borderTopColor: '#eef2f5', paddingVertical: 14, minHeight: 50,
+    justifyContent: 'center',
+  },
+  lineItemText: { fontSize: 17, color: INK },
+  linePickHint: { fontSize: 14, color: MUTED, marginTop: 8 },
   hint: { fontSize: 15, color: MUTED, marginTop: 8, lineHeight: 21 },
 
   dropdown: {

@@ -36,9 +36,14 @@ export default function MedicationCapture({ navigation }) {
     try {
       const res = await captureAndReadLabel();
       if (res?.cancelled) return; // stay on this screen
-      // Hand the draft to the entry form. It arrives UNCONFIRMED and the patient must
-      // review/correct before submitting — the photo is already discarded.
-      navigation.navigate('MedicationEntry', { draft: res.draft });
+      // The photo is already discarded. Hand off to the entry form:
+      //  - a resolved NDC gives a confident name/strength/form draft (no dose/frequency);
+      //  - otherwise the recognized text lines, for the patient to pick the name from.
+      if (res.draft) {
+        navigation.navigate('MedicationEntry', { draft: res.draft });
+      } else {
+        navigation.navigate('MedicationEntry', { textLines: res.lines || [] });
+      }
     } catch (err) {
       Alert.alert(
         'Couldn’t read the label',

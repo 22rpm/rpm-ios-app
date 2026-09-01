@@ -52,7 +52,8 @@ export function deleteMedication(id) {
 }
 
 // Drug autocomplete (RxNorm-backed). Returns { results, degraded, source }. Never a
-// gate: an empty result just means the patient types the name as free text.
+// gate: an empty result just means the patient types the name as free text. Public
+// endpoint (no auth), so it doesn't depend on session/cookie state.
 export async function searchDrugs(q) {
   const res = await authFetch(`/api/medications/drug-search?q=${encodeURIComponent(q)}`, {
     method: 'GET',
@@ -61,4 +62,15 @@ export async function searchDrugs(q) {
     return { results: res.data.results || [], degraded: !!res.data.degraded };
   }
   return { results: [], degraded: true };
+}
+
+// NDC -> exact product (barcode / printed-NDC path). Returns { rxcui, name, active } or
+// null. The name carries strength + form; the caller must NOT treat strength as the
+// patient's dose. Public endpoint.
+export async function lookupNdc(ndc) {
+  const clean = String(ndc || '').replace(/\D/g, '');
+  if (clean.length < 8) return null;
+  const res = await authFetch(`/api/medications/ndc/${clean}`, { method: 'GET' });
+  if (res.ok && res.data?.ok) return res.data.result || null;
+  return null;
 }
