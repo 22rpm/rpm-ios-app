@@ -9,7 +9,7 @@
 // form; saving an edit returns the entry to review server-side. That is how a patient
 // acts on a rejected medication.
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
   ActivityIndicator, Alert, SafeAreaView, StatusBar, Image, KeyboardAvoidingView, Platform,
@@ -37,15 +37,32 @@ function extractForm(name) {
 
 export default function MedicationEntryScreen({ navigation, route }) {
   const editing = route?.params?.medication || null;
+  const draft = route?.params?.draft || null;
+  const src = editing || draft || {};
 
-  const [name, setName] = useState(editing?.drug_name || '');
-  const [rxcui, setRxcui] = useState(editing?.rxcui || null);
-  const [dose, setDose] = useState(editing?.dose || '');
-  const [form, setForm] = useState(editing?.route || '');
-  const [frequency, setFrequency] = useState(editing?.frequency || '');
-  const [instructions, setInstructions] = useState(editing?.admin_instructions || '');
-  const [pharmacyName, setPharmacyName] = useState(editing?.pharmacy_name || '');
-  const [pharmacyPhone, setPharmacyPhone] = useState(editing?.pharmacy_phone || '');
+  const [name, setName] = useState(src.drug_name || '');
+  const [rxcui, setRxcui] = useState(src.rxcui || null);
+  const [dose, setDose] = useState(src.dose || '');
+  const [form, setForm] = useState(src.route || '');
+  const [frequency, setFrequency] = useState(src.frequency || '');
+  const [instructions, setInstructions] = useState(src.admin_instructions || '');
+  const [pharmacyName, setPharmacyName] = useState(src.pharmacy_name || '');
+  const [pharmacyPhone, setPharmacyPhone] = useState(src.pharmacy_phone || '');
+  // True when this entry was pre-filled from a label photo — drives the "check the
+  // draft" banner and marks source='photo' on submit (provenance; stays set through
+  // the patient's corrections, since they're correcting a photo-originated draft).
+  const [fromPhoto, setFromPhoto] = useState(!!draft);
+
+  // A returning photo scan updates route.params.draft on this (already-mounted) screen;
+  // apply it to the form.
+  useEffect(() => {
+    const d = route?.params?.draft;
+    if (!d) return;
+    if (d.drug_name != null) setName(d.drug_name);
+    if (d.dose != null) setDose(d.dose);
+    setRxcui(null);
+    setFromPhoto(true);
+  }, [route?.params?.draft]);
 
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -98,7 +115,7 @@ export default function MedicationEntryScreen({ navigation, route }) {
       admin_instructions: instructions.trim() || null,
       pharmacy_name: pharmacyName.trim() || null,
       pharmacy_phone: pharmacyPhone.trim() || null,
-      source: 'typed',
+      source: fromPhoto ? 'photo' : 'typed',
     };
     const res = editing
       ? await updateMedication(editing.id, body)
@@ -133,6 +150,31 @@ export default function MedicationEntryScreen({ navigation, route }) {
               <Text style={styles.rejectHelpTitle} allowFontScaling>Please check this and update it</Text>
               <Text style={styles.rejectHelpBody} allowFontScaling>{editing.reject_reason}</Text>
             </View>
+          )}
+
+          {/* Photo draft: everything here still needs the patient's review before it's
+              saved — a misread strength must be caught here, not after. */}
+          {fromPhoto && (
+            <View style={styles.photoBanner}>
+              <Text style={styles.photoBannerTitle} allowFontScaling>Filled in from your photo</Text>
+              <Text style={styles.photoBannerBody} allowFontScaling>
+                Please check each field — especially the dose — and fix anything that isn’t
+                right before you save.
+              </Text>
+            </View>
+          )}
+
+          {!editing && (
+            <TouchableOpacity
+              style={styles.scanBtn}
+              onPress={() => navigation.navigate('MedicationCapture')}
+              accessibilityRole="button"
+              accessibilityLabel="Scan the label with your camera"
+            >
+              <Text style={styles.scanBtnText} allowFontScaling>
+                {fromPhoto ? '📷  Scan the label again' : '📷  Scan the label instead'}
+              </Text>
+            </TouchableOpacity>
           )}
 
           <Text style={styles.label} allowFontScaling>Medication name</Text>
@@ -258,6 +300,19 @@ const styles = StyleSheet.create({
   },
   rejectHelpTitle: { fontSize: 18, fontWeight: '800', color: '#8a5300', marginBottom: 6 },
   rejectHelpBody: { fontSize: 17, color: '#5b4322', lineHeight: 24 },
+
+  photoBanner: {
+    backgroundColor: '#eef4f8', borderWidth: 1, borderColor: '#d3e2ec', borderRadius: 12,
+    padding: 16, marginBottom: 10,
+  },
+  photoBannerTitle: { fontSize: 17, fontWeight: '800', color: '#0a4a5e', marginBottom: 4 },
+  photoBannerBody: { fontSize: 16, color: '#0a4a5e', lineHeight: 23 },
+
+  scanBtn: {
+    borderWidth: 1.5, borderColor: BRAND, borderRadius: 12, paddingVertical: 14,
+    alignItems: 'center', minHeight: 52, justifyContent: 'center', marginBottom: 4,
+  },
+  scanBtnText: { color: BRAND, fontSize: 17, fontWeight: '800' },
 
   reassure: { fontSize: 16, color: MUTED, marginTop: 22, marginBottom: 8, lineHeight: 23 },
 

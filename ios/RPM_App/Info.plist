@@ -70,5 +70,7 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo of a medication label so the app can read it on your device and fill in a draft for you to check. The photo is not saved or uploaded.</string>
 </dict>
 </plist>

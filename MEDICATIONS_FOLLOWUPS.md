@@ -1,11 +1,37 @@
 # Medications follow-ups (rpm-ios-app)
 
 **Update (2026-08-31): the feature is now built** (schema, RxNorm autocomplete,
-patient typed entry, clinician confirm/reject). The authoritative design + status is
-in the backend repo: `MEDICATIONS_DESIGN.md`. What remains is the PHOTO path (step 5),
-which is what the two concerns below are about — they are no longer "before it's
-shippable", they are "before the photo/OCR path ships". The typed path (autocomplete +
-free text) is live and every entry goes through clinician review.
+patient typed entry, clinician confirm/reject, AND the photo path). The authoritative
+design + status is in the backend repo: `MEDICATIONS_DESIGN.md`. Every entry — typed,
+free text, or photo-read — arrives `unconfirmed` and goes through clinician review.
+
+## 0. Step 5 (photo → OCR → draft) needs a native build — do this before device testing
+
+The photo path reads the label ON-DEVICE and discards the image immediately; nothing is
+stored (no camera roll, no upload; `document_key`/`document_sha256` stay unused until
+S3). It depends on three native modules that must be installed and the app rebuilt:
+
+```
+npm install
+cd ios && pod install && cd ..
+# then rebuild the app (Xcode or: npx react-native run-ios)
+```
+
+Added to `package.json`: `react-native-image-picker` (OS camera, `saveToPhotos:false`),
+`@react-native-ml-kit/text-recognition` (on-device OCR, no network), `react-native-fs`
+(unlink the temp image). `NSCameraUsageDescription` is already added to
+`ios/RPM_App/Info.plist`. Until `pod install` + rebuild is done, the app will not bundle
+(Metro resolves the new imports) — this is expected; it's a native step, not a JS one.
+
+Files: `labelOcr.js` (capture + OCR + discard), `MedicationCapture.js` (the scan
+screen, with the "photo isn't saved" line), and the draft banner in
+`MedicationEntryScreen.js`. The OCR parse is best-effort — a misread strength cannot be
+caught by the app; the patient corrects the draft and a clinician confirms the entry.
+See concern #1 below.
+
+Android note: ML Kit text recognition also supports Android, but this build only wired
+iOS (`Info.plist`). Add the Android camera permission + ML Kit setup when that surface
+is built.
 
 ## 1. Label OCR is not trustworthy for a clinical record — human verification is required
 

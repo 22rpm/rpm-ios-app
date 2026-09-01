@@ -1,16 +1,24 @@
-// MedicationCapture.js — SHELL of the "add medication by photo" flow. A mock camera
-// viewfinder with guidance on photographing a pill-bottle label, and a shutter that
-// (in this shell) just confirms and returns. No real camera, no OCR, no persistence.
+// MedicationCapture.js — photograph a medication label, read it ON-DEVICE, and use the
+// text to pre-fill a DRAFT the patient then reviews (medications step 5, entry path A).
 //
-// The confirmation deliberately says a team member will REVIEW the label — the real
-// version cannot trust OCR to write a drug name/dose into a clinical record without
-// human verification. See MEDICATIONS_FOLLOWUPS.md #1.
+// Two things this screen makes true and states plainly:
+//   1. The result is only a draft — after the photo, the patient lands on the entry form
+//      and must check and confirm every field (especially the dose) before submitting.
+//      A misread strength is correctable there, before anything is saved. (Same
+//      unconfirmed path as typing.)
+//   2. The photo is NOT kept. It's read on the phone and discarded immediately — never
+//      saved to the camera roll, never uploaded. The screen says so in one sentence.
 
-import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Image, Alert, StatusBar } from 'react-native';
+import React, { useState } from 'react';
+import {
+  View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Image, Alert, StatusBar, ActivityIndicator,
+} from 'react-native';
 import globalStyles from './globalStyles';
+import { captureAndReadLabel } from './labelOcr';
 
 const BRAND = globalStyles.primaryColor.color;
+const INK = '#1f2d3d';
+const MUTED = '#5b6b7a';
 
 const TIPS = [
   'Find good light and avoid glare on the label.',
@@ -20,94 +28,131 @@ const TIPS = [
 ];
 
 export default function MedicationCapture({ navigation }) {
+  const [busy, setBusy] = useState(false);
   const back = () => (navigation?.canGoBack?.() ? navigation.goBack() : navigation.navigate('Profile'));
 
-  const capture = () => {
-    Alert.alert(
-      'Photo taken',
-      'A member of your care team will read the label and add the medication to your list, so your record stays accurate. (This is a preview — nothing was saved.)',
-      [{ text: 'OK', onPress: back }]
-    );
+  const takePhoto = async () => {
+    setBusy(true);
+    try {
+      const res = await captureAndReadLabel();
+      if (res?.cancelled) return; // stay on this screen
+      // Hand the draft to the entry form. It arrives UNCONFIRMED and the patient must
+      // review/correct before submitting — the photo is already discarded.
+      navigation.navigate('MedicationEntry', { draft: res.draft });
+    } catch (err) {
+      Alert.alert(
+        'Couldn’t read the label',
+        'You can try the photo again, or type the medication in yourself.',
+        [
+          { text: 'Type it in', onPress: () => navigation.navigate('MedicationEntry') },
+          { text: 'Try again' },
+        ]
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" backgroundColor="#000" />
+      <StatusBar barStyle="dark-content" />
 
       <View style={styles.header}>
-        <TouchableOpacity onPress={back} accessibilityRole="button" accessibilityLabel="Back">
+        <TouchableOpacity onPress={back} accessibilityRole="button" accessibilityLabel="Back" style={styles.backHit}>
           <Image source={require('./assets/icon_back.png')} style={styles.backIcon} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Add a Medication</Text>
-        <View style={styles.backIcon} />
+        <Text style={styles.headerTitle} allowFontScaling>Scan a Label</Text>
+        <View style={styles.backHit} />
       </View>
 
-      {/* Mock viewfinder */}
-      <View style={styles.viewfinder}>
-        <View style={styles.frame}>
-          <Text style={styles.frameGlyph}>📷</Text>
-          <Text style={styles.frameText} allowFontScaling>Position the pill bottle label inside the frame</Text>
+      <View style={styles.body}>
+        <View style={styles.illus}>
+          <Text style={styles.illusGlyph}>💊📷</Text>
         </View>
-      </View>
 
-      {/* Guidance */}
-      <View style={styles.guide}>
-        <Text style={styles.guideTitle} allowFontScaling>For a clear photo</Text>
-        {TIPS.map((t, i) => (
-          <View key={i} style={styles.tipRow}>
-            <Text style={styles.tipDot}>•</Text>
-            <Text style={styles.tipText} allowFontScaling>{t}</Text>
-          </View>
-        ))}
-      </View>
+        <Text style={styles.lead} allowFontScaling>
+          Take a photo of the label on your medication bottle. We’ll read it and fill in a
+          draft for you to check.
+        </Text>
 
-      {/* Shutter */}
-      <View style={styles.shutterBar}>
-        <TouchableOpacity style={styles.shutter} onPress={capture} accessibilityRole="button" accessibilityLabel="Take photo">
-          <View style={styles.shutterInner} />
+        {/* Constraint #2 — one honest sentence that the photo isn't kept. */}
+        <View style={styles.privacyNote}>
+          <Text style={styles.privacyText} allowFontScaling>
+            The photo is only used to read the label on your phone. It isn’t saved or sent
+            anywhere.
+          </Text>
+        </View>
+
+        <View style={styles.guide}>
+          <Text style={styles.guideTitle} allowFontScaling>For a clear photo</Text>
+          {TIPS.map((t, i) => (
+            <View key={i} style={styles.tipRow}>
+              <Text style={styles.tipDot}>•</Text>
+              <Text style={styles.tipText} allowFontScaling>{t}</Text>
+            </View>
+          ))}
+        </View>
+
+        <View style={{ flex: 1 }} />
+
+        <TouchableOpacity
+          style={[styles.shootBtn, busy && { opacity: 0.6 }]}
+          onPress={takePhoto}
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel="Take photo of label"
+        >
+          {busy ? <ActivityIndicator color="#fff" /> : (
+            <Text style={styles.shootText} allowFontScaling>Take photo of label</Text>
+          )}
         </TouchableOpacity>
-        <Text style={styles.shutterLabel} allowFontScaling>Tap to take the photo</Text>
+
+        <TouchableOpacity
+          style={styles.typeInstead}
+          onPress={() => navigation.navigate('MedicationEntry')}
+          accessibilityRole="button"
+          accessibilityLabel="Type it in instead"
+        >
+          <Text style={styles.typeInsteadText} allowFontScaling>Type it in instead</Text>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#000' },
+  safe: { flex: 1, backgroundColor: '#f4f7f9' },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    backgroundColor: '#000',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 12, backgroundColor: '#fff',
+    borderBottomWidth: 1, borderBottomColor: '#e4eaef',
   },
-  backIcon: { width: 24, height: 24, tintColor: '#fff' },
-  headerTitle: { color: '#fff', fontSize: 20, fontWeight: '800' },
+  backHit: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
+  backIcon: { width: 26, height: 26, tintColor: INK },
+  headerTitle: { fontSize: 20, fontWeight: '800', color: INK },
 
-  viewfinder: { flex: 1, backgroundColor: '#111', alignItems: 'center', justifyContent: 'center', margin: 16, borderRadius: 16 },
-  frame: {
-    width: '82%',
-    aspectRatio: 1.6,
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.85)',
-    borderRadius: 14,
-    borderStyle: 'dashed',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
+  body: { flex: 1, padding: 20 },
+  illus: { alignItems: 'center', marginTop: 8, marginBottom: 12 },
+  illusGlyph: { fontSize: 44 },
+  lead: { fontSize: 18, color: INK, lineHeight: 26, textAlign: 'center' },
+
+  privacyNote: {
+    marginTop: 16, backgroundColor: '#eef4f8', borderRadius: 12, padding: 14,
+    borderWidth: 1, borderColor: '#d3e2ec',
   },
-  frameGlyph: { fontSize: 40, marginBottom: 10 },
-  frameText: { color: '#e9eef2', fontSize: 16, textAlign: 'center', lineHeight: 22 },
+  privacyText: { fontSize: 16, color: '#0a4a5e', lineHeight: 23, textAlign: 'center' },
 
-  guide: { backgroundColor: '#000', paddingHorizontal: 20, paddingTop: 6 },
-  guideTitle: { color: '#fff', fontSize: 17, fontWeight: '800', marginBottom: 8 },
-  tipRow: { flexDirection: 'row', marginBottom: 6 },
-  tipDot: { color: BRAND, fontSize: 18, width: 16 },
-  tipText: { color: '#d7dde2', fontSize: 16, flex: 1, lineHeight: 22 },
+  guide: { marginTop: 20 },
+  guideTitle: { fontSize: 17, fontWeight: '800', color: INK, marginBottom: 8 },
+  tipRow: { flexDirection: 'row', marginBottom: 8 },
+  tipDot: { color: BRAND, fontSize: 18, width: 18 },
+  tipText: { color: MUTED, fontSize: 16, flex: 1, lineHeight: 23 },
 
-  shutterBar: { alignItems: 'center', paddingVertical: 18, backgroundColor: '#000' },
-  shutter: { width: 72, height: 72, borderRadius: 36, borderWidth: 4, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' },
-  shutterInner: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#fff' },
-  shutterLabel: { color: '#aeb6bd', fontSize: 14, marginTop: 10 },
+  shootBtn: {
+    backgroundColor: BRAND, borderRadius: 14, paddingVertical: 18, alignItems: 'center',
+    minHeight: 58, justifyContent: 'center',
+  },
+  shootText: { color: '#fff', fontSize: 19, fontWeight: '800' },
+  typeInstead: { paddingVertical: 16, alignItems: 'center', marginTop: 6, minHeight: 52, justifyContent: 'center' },
+  typeInsteadText: { color: BRAND, fontSize: 18, fontWeight: '700' },
 });
