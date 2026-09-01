@@ -37,6 +37,21 @@ function extractForm(name) {
   const m = cleaned.match(/(?:\d+(?:\.\d+)?)\s?(?:mg|mcg|g|ml|%|units?|iu)\b\s*(.*)$/i);
   return m && m[1] ? m[1].trim() : '';
 }
+// Normalize a typed date to YYYY-MM-DD (the API's format). Accepts the label's common
+// MM/DD/YYYY too. Returns '' if it can't be parsed — the field is optional.
+function normalizeDate(s) {
+  const t = (s || '').trim();
+  if (!t) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const mm = m[1].padStart(2, '0');
+    const dd = m[2].padStart(2, '0');
+    return `${m[3]}-${mm}-${dd}`;
+  }
+  return '';
+}
+
 // Snap an extracted form phrase ("Oral Capsule") to a chip ("Capsule") when possible,
 // so the picker highlights it; otherwise keep the raw text (shown in the free-text box).
 function normalizeForm(text) {
@@ -58,6 +73,10 @@ export default function MedicationEntryScreen({ navigation, route }) {
   const [instructions, setInstructions] = useState(src.admin_instructions || '');
   const [pharmacyName, setPharmacyName] = useState(src.pharmacy_name || '');
   const [pharmacyPhone, setPharmacyPhone] = useState(src.pharmacy_phone || '');
+  // Optional refill-reminder fields, read off the label (quantity, date filled, refills).
+  const [dispenseQty, setDispenseQty] = useState(src.dispense_quantity != null ? String(src.dispense_quantity) : '');
+  const [lastFilled, setLastFilled] = useState((src.last_filled_date || '').slice(0, 10));
+  const [refillsLeft, setRefillsLeft] = useState(src.refills_remaining != null ? String(src.refills_remaining) : '');
   // True when this entry was pre-filled from a label photo — drives the "check the
   // draft" banner and marks source='photo' on submit (provenance; stays set through
   // the patient's corrections, since they're correcting a photo-originated draft).
@@ -139,6 +158,9 @@ export default function MedicationEntryScreen({ navigation, route }) {
       admin_instructions: instructions.trim() || null,
       pharmacy_name: pharmacyName.trim() || null,
       pharmacy_phone: pharmacyPhone.trim() || null,
+      dispense_quantity: dispenseQty.trim() ? Number(dispenseQty.trim()) : null,
+      last_filled_date: normalizeDate(lastFilled) || null,
+      refills_remaining: refillsLeft.trim() ? Number(refillsLeft.trim()) : null,
       source: fromPhoto ? 'photo' : 'typed',
     };
     const res = editing
@@ -274,6 +296,13 @@ export default function MedicationEntryScreen({ navigation, route }) {
           <Field label="Pharmacy name (optional)" value={pharmacyName} onChange={setPharmacyName} placeholder="Your pharmacy" />
           <Field label="Pharmacy phone (optional)" value={pharmacyPhone} onChange={setPharmacyPhone} placeholder="(555) 555-5555" keyboardType="phone-pad" />
 
+          <Text style={styles.groupHint} allowFontScaling>
+            For refill reminders (optional) — copy these from the label if you like.
+          </Text>
+          <Field label="Quantity (from the label)" value={dispenseQty} onChange={setDispenseQty} placeholder="e.g. 30" keyboardType="number-pad" />
+          <Field label="Date filled (from the label)" value={lastFilled} onChange={setLastFilled} placeholder="MM/DD/YYYY" />
+          <Field label="Refills left (from the label)" value={refillsLeft} onChange={setRefillsLeft} placeholder="e.g. 9" keyboardType="number-pad" />
+
           <Text style={styles.reassure} allowFontScaling>
             A member of your care team will check what you enter and confirm it on your list.
           </Text>
@@ -398,6 +427,7 @@ const styles = StyleSheet.create({
   lineItemText: { fontSize: 17, color: INK },
   linePickHint: { fontSize: 14, color: MUTED, marginTop: 8 },
   hint: { fontSize: 15, color: MUTED, marginTop: 8, lineHeight: 21 },
+  groupHint: { fontSize: 15, color: MUTED, marginTop: 24, lineHeight: 21, fontWeight: '600' },
 
   dropdown: {
     backgroundColor: '#fff', borderWidth: 1.5, borderColor: BRAND, borderRadius: 12,
