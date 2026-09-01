@@ -17,7 +17,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { API_BASE } from './apiConfig';
 import MedicationsSection from './MedicationsSection';
-import { SAMPLE_MEDICATIONS } from './medications';
 
 const { width, height } = Dimensions.get('window');
 
@@ -188,11 +187,8 @@ export default function Profile({ navigation }) {
           </View>
         </View>
 
-        {/* Medications (shell — pitch only; no persistence) */}
-        <MedicationsSection
-          medications={SAMPLE_MEDICATIONS}
-          onAdd={() => navigation.navigate('MedicationCapture')}
-        />
+        {/* Medications — patient-reported, care-team-confirmed. */}
+        <MedicationsSection navigation={navigation} />
 
         {/* Personal Information */}
         <View style={styles.section}>

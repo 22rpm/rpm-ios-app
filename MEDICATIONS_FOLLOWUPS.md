@@ -1,8 +1,11 @@
 # Medications follow-ups (rpm-ios-app)
 
-The medications feature is a **SHELL — a pitch of the idea**, not a build: no OCR, no
-backend, no persistence. Two things must be true before it's anywhere near
-shippable.
+**Update (2026-08-31): the feature is now built** (schema, RxNorm autocomplete,
+patient typed entry, clinician confirm/reject). The authoritative design + status is
+in the backend repo: `MEDICATIONS_DESIGN.md`. What remains is the PHOTO path (step 5),
+which is what the two concerns below are about — they are no longer "before it's
+shippable", they are "before the photo/OCR path ships". The typed path (autocomplete +
+free text) is live and every entry goes through clinician review.
 
 ## 1. Label OCR is not trustworthy for a clinical record — human verification is required
 

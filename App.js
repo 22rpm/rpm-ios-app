@@ -24,6 +24,7 @@ import Readings from './Readings';
 import Education from './Education';
 import ArticleScreen from './ArticleScreen';
 import MedicationCapture from './MedicationCapture';
+import MedicationEntryScreen from './MedicationEntryScreen';
 import { drainOutbox } from './outbox';
 
 import { API_BASE } from './apiConfig';
@@ -190,6 +191,7 @@ export default function App() {
         <Stack.Screen name='Settings' component={Settings}/>
         <Stack.Screen name='Profile' component={Profile}/>
         <Stack.Screen name="MedicationCapture" component={MedicationCapture} />
+        <Stack.Screen name="MedicationEntry" component={MedicationEntryScreen} />
         <Stack.Screen name='PrivacySecurity' component={PrivacySecurity}/>
         <Stack.Screen name='AboutApp' component={AboutApp}/>
       </Stack.Navigator>
