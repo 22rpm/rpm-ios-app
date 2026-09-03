@@ -104,7 +104,9 @@ useEffect(() => {
 }, []);
 
   const handleBack = () => {
-    navigation.navigate('Home');
+    // Guarded so closing Settings returns to the real previous screen (PatientHome
+    // once the redesign is the landing), not the retired Home. See FRONTEND_FOLLOWUPS #1.
+    navigation?.canGoBack?.() ? navigation.goBack() : navigation.navigate('PatientHome');
   };
 
   const settingsOptions = [

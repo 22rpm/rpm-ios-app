@@ -210,7 +210,7 @@ export default function Login({ navigation }) {
             await AsyncStorage.setItem('refreshToken', refreshToken);
           }
           
-          navigation.replace('Home');
+          navigation.replace('PatientHome');
         } else {
           // Login failed, show manual form
           setShowManualLogin(true);
@@ -382,19 +382,19 @@ export default function Login({ navigation }) {
             {
               text: 'Not Now',
               style: 'cancel',
-              onPress: () => navigation.replace('Home')
+              onPress: () => navigation.replace('PatientHome')
             },
             {
               text: 'Enable',
               onPress: async () => {
                 await storeCredentialsForBiometric(userIdentifier, userPassword);
-                navigation.replace('Home');
+                navigation.replace('PatientHome');
               }
             }
           ]
         );
       } else {
-        navigation.replace('Home');
+        navigation.replace('PatientHome');
       }
     } else {
       // Handle different error scenarios
@@ -574,19 +574,19 @@ export default function Login({ navigation }) {
               {
                 text: 'Not Now',
                 style: 'cancel',
-                onPress: () => navigation.replace('Home')
+                onPress: () => navigation.replace('PatientHome')
               },
               {
                 text: 'Enable',
                 onPress: async () => {
                   await storeCredentialsForBiometric(email, password);
-                  navigation.replace('Home');
+                  navigation.replace('PatientHome');
                 }
               }
             ]
           );
         } else {
-          navigation.replace('Home');
+          navigation.replace('PatientHome');
         }
       } else {
         setError(data.message || 'Invalid OTP. Please try again.');

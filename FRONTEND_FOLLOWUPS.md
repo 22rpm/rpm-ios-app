@@ -79,3 +79,15 @@ messaging code (`Connection.js`) from the bundle — that is deliberately deferr
 large a diff right before a build; registration line only. Re-add BOTH the registration
 and the entry points only when Messages actually ships — the clinician side must be live
 and monitored first (see `b48de7c` rationale + branch `fix/messages-e2e`).
+
+## 4. `PrivacySecurity` screen is registered but has no navigation path — orphan, pre-1.0.50
+`<Stack.Screen name='PrivacySecurity' component={PrivacySecurity}/>` is registered at
+`App.js:195`, but **nothing navigates to it** — no `navigate('PrivacySecurity')` /
+`replace('PrivacySecurity')` anywhere in the app (verified by grep). It has been
+unreachable since before 1.0.50, so it is NOT a regression and was deliberately left out
+of the 1.0.50 nav work (no untested screen added to a release build).
+
+**1.0.51:** decide whether it should be reachable — most likely wired from `Settings`
+(a "Privacy & Security" row) or from `Profile` — then test it. If it's dead, remove the
+registration. Until then it ships as inert dead-registered code, same class as the
+`Connection` messaging screen (#3).
