@@ -34,3 +34,48 @@ home route.
 **Audit.** Back handlers hardcoded to 'Home' at patch time: `BloodPressure.js`,
 `ECG.js`, `Connection.js` (first `handleBack`). Regression grep:
 `grep -rnE "navigation.*navigate\(['\"]Home['\"]\)" --include='*.js' .`
+
+## 2. Info.plist permission strings are vehicle-app copy; Location key may be removable — DEFERRED to 1.0.51
+Deferred out of 1.0.50 to keep the pre-build diff minimal. Not functional bugs, but
+an inaccurate privacy disclosure App Review can flag, and one is user-visible.
+
+The usage strings are copied from an automotive app and are wrong for a medical RPM
+app (`ios/RPM_App/Info.plist`):
+- `NSLocationWhenInUseUsageDescription` — "...accurate vehicle performance data and
+  track your routes."
+- `NSBluetoothAlwaysUsageDescription` — "...connect to and communicate with your
+  vehicle's RPM monitoring device for real-time performance tracking."
+- (`NSFaceIDUsageDescription` and `NSCameraUsageDescription` read fine — leave them.)
+
+**1.0.51 — Bluetooth:** rewrite honestly, e.g. "This app uses Bluetooth to connect to
+your blood-pressure cuff and other monitoring devices."
+
+**1.0.51 — Location: VERIFY-THEN-REMOVE. The key comes out ONLY if nothing requests
+location — a missing usage string CRASHES the instant the location API fires.**
+Searched on `fix/bp-auto-reconnect` (2026-09, build 32) and found nothing requests it:
+- JS: no `navigator.geolocation`, no `react-native-geolocation`, no CoreLocation use.
+- Native iOS: no `CoreLocation` / `CLLocationManager` / `requestWhenInUseAuthorization`
+  in any `.m` / `.h` / `.swift`.
+- Pods: no location pod in `Podfile` / `Podfile.lock` (the Viatom BLE lib does not
+  pull CoreLocation).
+- The only "location" references are INERT: `PrivacySecurityScreen.js` has a "Location
+  Tracking" UI toggle that stores a boolean (`useState`) but calls no location API, and
+  `Oxygen.js` `location:'default'` is a SQLite path param.
+So the key is removable — **but re-run that exact search at 1.0.51 time and confirm the
+PrivacySecurityScreen toggle hasn't since been wired to CoreLocation. If anything
+requests location, KEEP the key and only rewrite the string honestly.**
+
+## 3. Connection (messaging) screen still registered though unreachable — DEFERRED to 1.0.51
+Messaging entry points were pulled for 1.0.50 (Home.js "Chat" menu item commented out;
+PatientHome `NAV_ITEMS` Messages removed — commit `b48de7c`), but the messaging screen
+is STILL registered in the navigator at `App.js:190`:
+`<Stack.Screen name='Connection' component={Connection}/>`. It is NOT reachable (no live
+`navigate('Connection')`, no deep link, `initialRouteName="Login"`), but it is latent —
+a future stray `navigate('Connection')` would light up a patient-messages-into-the-void
+screen (Connection.js = ConversationsList + ChatScreen, socket.io, `/conversations`).
+
+**1.0.51 fix:** remove the `App.js:190` registration (one line). Do NOT remove the
+messaging code (`Connection.js`) from the bundle — that is deliberately deferred as too
+large a diff right before a build; registration line only. Re-add BOTH the registration
+and the entry points only when Messages actually ships — the clinician side must be live
+and monitored first (see `b48de7c` rationale + branch `fix/messages-e2e`).
