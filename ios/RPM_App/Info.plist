@@ -47,9 +47,9 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>Use Face ID to quickly and securely access your account</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>This app uses location to provide accurate vehicle performance data and track your routes.</string>
+	<string>22-RPM does not use your location for tracking or routes.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>This app uses Bluetooth to connect to and communicate with your vehicle's RPM monitoring device for real-time performance tracking.</string>
+	<string>22-RPM uses Bluetooth to connect to your blood pressure cuff and other monitoring devices so your readings can be recorded.</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UIBackgroundModes</key>
@@ -72,5 +72,7 @@
 	<false/>
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo of a medication label so the app can read it on your device and fill in a draft for you to check. The photo is not saved or uploaded.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>22-RPM does not use your photo library. Medication labels are captured with the camera and read on your device; the image is not saved to your library or uploaded.</string>
 </dict>
 </plist>

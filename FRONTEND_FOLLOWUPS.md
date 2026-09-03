@@ -35,9 +35,23 @@ home route.
 `ECG.js`, `Connection.js` (first `handleBack`). Regression grep:
 `grep -rnE "navigation.*navigate\(['\"]Home['\"]\)" --include='*.js' .`
 
-## 2. Info.plist permission strings are vehicle-app copy; Location key may be removable — DEFERRED to 1.0.51
-Deferred out of 1.0.50 to keep the pre-build diff minimal. Not functional bugs, but
-an inaccurate privacy disclosure App Review can flag, and one is user-visible.
+## 2. Info.plist permission strings — vehicle copy REWORDED in 1.0.50; Location-key REMOVAL still deferred to 1.0.51
+**Update (1.0.50, build 52):** the two vehicle-copy strings were reworded honestly in
+this cycle (the Info.plist was already open to add `NSPhotoLibraryUsageDescription` for
+the 90683 upload fix, and Apple reads these): `NSBluetoothAlwaysUsageDescription` → the
+cuff/monitoring-device copy shown at pairing; `NSLocationWhenInUseUsageDescription` →
+reworded to a bare disclaimer ("does not use your location for tracking or routes") with
+**no purpose claimed** — since the native path hasn't been audited, the string asserts
+nothing unverified. `NSFaceID` and
+`NSCamera` were already honest; `NSBluetoothPeripheralUsageDescription` is absent.
+
+**Still deferred to 1.0.51 — the Location-key REMOVAL, not the wording.** We did NOT
+remove `NSLocationWhenInUseUsageDescription` because the native Viatom BLE library was
+not audited for a CoreLocation request, and removing a key something requests crashes on
+first use. 1.0.51: audit the Viatom native path (`.m`/`.swift` in `ios/VTMDeviceManager`)
+for any location request; if truly none, remove the key — otherwise keep it and the
+reworded string stands. Rewording was zero-risk and shipped now; removal needs a device
+test.
 
 The usage strings are copied from an automotive app and are wrong for a medical RPM
 app (`ios/RPM_App/Info.plist`):
