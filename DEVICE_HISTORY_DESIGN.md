@@ -143,3 +143,92 @@ durable outbox on 1.0.49, any readings taken from ~Aug 21 on were never delivere
 they're still in the cuff's 255-record buffer with real `measuring_timestamp`s, this feature
 recovers them accurately on the next connect. Recovery for the CURRENT gap is still the
 manufacturer app (DEVICE_HISTORY_FOLLOWUPS #1); this design prevents the next one.
+
+---
+
+## Update — findings from the ingest/clock investigation (both must be handled)
+
+### A. `dev_data.created_at` is server-receipt time, and the 99454 count buckets on it — existing counts may already be wrong
+Confirmed in the backend:
+- Every active insert stamps `created_at` on the DB, never from the client:
+  `services/devData.service.js:7` (`INSERT INTO dev_data (dev_id, data)` — no `created_at`),
+  plus `services/deviceData.service.js:819` (`… (dev_id, user_id, dev_type, data)`) and
+  `:1838` (`createBPDataService`), none of which set it. The column defaults to now() via
+  the migration `20250819125116_create_dev_data_table.js:6` (`table.timestamps(true, true)`).
+- The 99454 transmission-day count buckets on `created_at`:
+  `services/rpmNote.service.js:140,142` (`DISTINCT dayBucket(created_at) … WHERE …
+  monthWhere(created_at)`). So the billable day is **when the server received the row**, not
+  when the reading was taken.
+- The iOS payload does carry a time — `data.timestamp = new Date().toISOString()` (the PHONE
+  clock at store time, `BloodPressure.js:494` in `storeMeasurementData`) plus `data.date` /
+  `data.time` — but the count ignores it, and it's the phone clock, **not** the device
+  `measuring_timestamp` (which is parsed natively at `ViatomDeviceManager.m:584` and then
+  discarded).
+
+**Consequence:** any reading that isn't delivered the instant it's taken is dated by receipt.
+A morning reading synced that evening lands on the evening; a batch of queued readings flushed
+by the durable outbox lands on **one** `created_at` instant, collapsing multiple days into one
+transmission day → **the 99454 count can undercount.** This predates the history feature — it
+affects the live path too.
+
+**The Aug 23 identical `00:04:05` rows** are the fingerprint of exactly this: several readings
+inserted at one server instant (an outbox flush just after midnight), so their true days
+collapse onto Aug 23. To confirm on prod, compare the stamped time to the embedded time:
+```sql
+SELECT id, created_at,
+       data->>'$.timestamp' AS phone_ts,
+       data->>'$.date' AS d, data->>'$.time' AS t
+FROM dev_data
+WHERE user_id = <patient> AND created_at BETWEEN '2026-08-23 00:00:00' AND '2026-08-23 00:10:00'
+ORDER BY id;
+```
+If `created_at` is identical across rows while `phone_ts`/`date` differ, that proves batch
+receipt-stamping and that the embedded time is the truer measurement time.
+
+**Fix (bigger than this feature — flag to Cleo, billing-accuracy):**
+- The reading must carry its **measurement time** end to end. For live readings, send the
+  device `measuring_timestamp` (available at `ViatomDeviceManager.m:584`) in the payload —
+  not the phone clock. For history records, it's already the record's `measuring_timestamp`.
+- The 99454 day-count (`rpmNote.service.js:140`) should bucket on that **measurement
+  timestamp**, not `created_at`. `created_at` stays as the audit/receipt trail.
+- This is a claims-affecting change: whether past months should be recomputed is a billing
+  decision for Cleo, not a silent code change. Recorded here so it isn't lost; the history
+  feature MUST NOT ship posting device readings against `created_at`, or it would repeat the
+  bug for backfilled data.
+
+### B. Device-clock offset must be captured BEFORE syncTime, then applied to history
+`syncTime` on connect fixes only *future* readings; records already in the buffer were stamped
+by whatever the clock said when they were taken. If we sync first, we destroy the evidence of
+how far off the clock was. So the order is:
+1. On connect, **read the device's current time first** (`requestDeviceInfo` →
+   `VTMDeviceInfo.cur_time`, `VTMBLEStruct.h:117`) and compute
+   `offset = phoneNow − deviceNow`.
+2. **Read the history**; each record's `measuring_timestamp` is on the un-synced clock.
+3. **Apply the offset** to each historical record (`corrected = measuring_timestamp + offset`)
+   before dedup/post. (Assumes the drift is ~constant since the readings were taken — a single
+   offset; note it can't correct a clock that was *reset* between readings and now. Sanity-
+   bound the result and flag records that still look implausible instead of posting silently.)
+4. **Only then call `syncTime`/`syncTimeZone`** to correct the clock going forward.
+Record both the raw `measuring_timestamp` and the applied `offset` on each posted reading so
+the correction is auditable.
+
+---
+
+## Device test checklist (work through with a real cuff)
+
+- [ ] **Buffer size** — take/observe readings and read the file list; how many records does
+      it hold before it stops growing? (Header caps the list at 255; real capacity may differ.)
+- [ ] **Overwrite behavior** — once full, does a new reading drop the OLDEST, or refuse? This
+      decides whether a long outage loses the earliest readings.
+- [ ] **Clock drift** — read `VTMDeviceInfo.cur_time` on a cuff that's never been `syncTime`'d
+      and compare to real time. How far off is it? (Gates 99454 accuracy for backfill — finding B.)
+- [ ] **File read vs live reading** — do `requestFilelist`/`readFile` work in the current BP
+      state, or require `requestChangeBPState`? Does a history read interrupt or block a live
+      measurement, and vice versa?
+- [ ] **File structure** — one file per measurement, or one file with many records? What does
+      the filename encode (timestamp? index?)? Determines the read/parse loop.
+- [ ] **Model confirmation** — the structs say bp2/bp2a. Confirm the patient's actual cuff
+      model uses this file/record layout; a different model may differ.
+- [ ] **(Bonus, ties to finding A)** — for a batch of live readings, compare each row's
+      `created_at` to its embedded `data.timestamp`; quantify how often receipt-stamping has
+      already shifted a reading's day.
