@@ -53,12 +53,32 @@ could be wrong, which would misdate 99454 days. Mitigations (part of this work):
   is large, correct or flag the history timestamps and surface it, don't post silently.
 - Sanity-bound each record: drop/flag timestamps in the future or absurdly old.
 
-### 4. Buffer size and overwrite — PARTIALLY known, MUST TEST.
-`VTMFileList` caps at **255** entries (`u_char file_num`, `fileName[255]`) — so at most ~255
-stored records. **Whether the device overwrites oldest when full is not in the headers** —
-it's firmware-dependent. **Must test on device** (or get vendor confirmation). If it wraps,
-a long outage past the buffer loses the earliest readings (the "buffer may wrap" caveat in
-DEVICE_HISTORY_FOLLOWUPS #1).
+**On-device (2026-09-04):** `requestDeviceInfo` did NOT return `cur_time` at connect, so we
+could not read the device clock directly. The wiring/routing are correct — `deviceInfo:` is
+the delegate, `deviceDelegate` is set, `requestDeviceInfo` is called at connect
+(`ViatomDeviceManager.m:910`), and there is no competing `commandCompletion` path for
+GetDeviceInfo — so the likely cause is the device dropping/deprioritizing the GetDeviceInfo
+command right at connect (it was also blocked once by an in-progress measurement). **But the
+clock is effectively confirmed by the data itself:** all 50 records' `measuring_timestamp`
+values match their `YYYYMMDDHHMMSS` filenames and land on real measurement dates → drift is
+minimal. Definitive drift check for build time: take ONE live reading and compare its
+`measuring_timestamp` to the phone clock, or retry `requestDeviceInfo` a few seconds after
+connect. Do NOT `syncTime` before reading history — it would erase the drift evidence.
+
+### 4. Buffer is a RING, cap 50 on this BP2A — CONFIRMED on device (2026-09-04).
+`requestFilelist` returned **50** files and the device is FULL: the write pointer wraps —
+list positions 1–21 ran Aug 24 → Sep 4, then position 22 jumped back to Aug 22 and ran
+forward again. So **50 is the cap and every new reading overwrites the oldest.**
+- **Order ONLY by `measuring_timestamp`, NEVER by file index or list position** — the list is
+  in ring-write order, not chronological.
+- A gap longer than 50 readings loses the earliest permanently → sync on **every** connect to
+  stay ahead of the ring.
+- All 50 read cleanly: every record `status_code=0`, arrhythmia bit 0, `file_type=1` (BP),
+  38 bytes, plausible values — no partial/aborted records here. The pipeline must still filter
+  `status_code != 0` / implausible values (`0/0`) defensively.
+- Distinct real dates recovered (Aug 22, 23, 24, 25, 27, Sep 3, Sep 4) that never reached the
+  backend — confirms the premise: the ring holds the outage window.
+(The header's `VTMFileList` cap of 255 is the protocol max; this device's actual ring is 50.)
 
 ### 5. Dedup / unique identity — the natural key is `measuring_timestamp`, BUT there's a trap.
 The unique key for a stored reading is its `measuring_timestamp` (a patient doesn't measure
@@ -232,3 +252,56 @@ the correction is auditable.
 - [ ] **(Bonus, ties to finding A)** — for a batch of live readings, compare each row's
       `created_at` to its embedded `data.timestamp`; quantify how often receipt-stamping has
       already shifted a reading's day.
+
+---
+
+## Write pipeline — SCOPED, NOT BUILT. GATED on a backend change.
+
+### THE GATE (must be answered/fixed FIRST — everything else depends on it)
+Today the ingest CANNOT accept a measurement time. `services/devData.service.js:7` runs
+`INSERT INTO dev_data (dev_id, data)` with **no** `created_at` (defaults to `now()`), and the
+99454 day-count buckets on `created_at` (`services/rpmNote.service.js:140`) — see
+BILLING_FOLLOWUPS #16. So if the app posts the 50 backfilled readings as-is, **they all get
+`created_at = today`, collapse onto one day, and are dated wrong** — making billing WORSE, not
+better, and burying real transmission days (Aug 22–Sep 4) under today.
+
+**Required backend change, before the app posts anything:**
+1. Ingest accepts a client **measurement time** (e.g. `data.measured_at` = the device
+   `measuring_timestamp`, epoch seconds) and persists it — either into `created_at` on insert,
+   or (cleaner, keeps the receipt trail) a new `measured_at` column.
+2. The 99454 count (`rpmNote.service.js:140`) buckets on **`measured_at`**, not `created_at`.
+This is claims-affecting → **Cleo signs off** (BILLING_FOLLOWUPS #16). Until it lands and
+deploys, the history-sync feature stays read-only. No exceptions — posting against `created_at`
+is the one outcome we must not ship.
+
+### Dedup query (once `measured_at` exists)
+On connect, fetch the measurement times we already have for this patient in the window, then
+drop any device record whose `measuring_timestamp` matches:
+```sql
+SELECT measured_at            -- (or JSON_UNQUOTE(data->'$.measured_at')) 
+FROM dev_data
+WHERE user_id = ? AND measured_at BETWEEN ? AND ?;   -- window = min..max of the device batch
+```
+Client keeps device records whose `measuring_timestamp` is NOT in that set. `measuring_timestamp`
+is the unique key (§5). Also align the **live** path to send `measured_at` from the device
+(`ViatomDeviceManager.m:584`) so live and backfilled readings dedup on the same key.
+
+### POST body (per record)
+```json
+{ "devId": "<cuff id>", "devType": "bp",
+  "data": { "systolic": 117, "diastolic": 80, "mean": 88, "pulse": 75,
+            "irregular": false, "measured_at": 1787592368, "source": "device_history" } }
+```
+`measured_at` = the device `measuring_timestamp` (epoch s). `source` marks backfill for audit.
+
+### Run-twice / idempotency
+Safe IF dedup keys on `measured_at` AND the backend stores it: a second sync re-reads the same
+ring, the dedup query finds all 50 already present, and nothing is posted. Without the backend
+change, re-runs would insert 50 fresh `created_at=today` rows every time — another reason the
+gate comes first. Never `deleteFile` from the ring; idempotency comes from dedup, not deletion.
+
+### Order of work
+1. Backend: `measured_at` accept + count-buckets-on-it (+ Cleo sign-off). Deploy.
+2. iOS live path: send `measured_at` from the device timestamp (fixes go-forward dedup + #16).
+3. iOS history sync: `readStoredRecords` → filter invalid → dedup (query above) → POST via the
+   durable outbox. Only now does the app write backfilled data.
