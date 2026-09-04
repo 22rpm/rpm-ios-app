@@ -65,6 +65,9 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 @property (nonatomic, copy) NSString *probeDeviceTime;
 @property (nonatomic, copy) NSString *probePhoneTime;
 @property (nonatomic, copy) NSString *probeFirstFileName;
+@property (nonatomic, strong) NSMutableArray<NSString *> *probeAllNames;
+@property (nonatomic, strong) NSMutableArray *probeRecords;
+@property (nonatomic, assign) NSInteger probeIndex;
 @property (nonatomic, strong) NSMutableDictionary<NSUUID*, CBPeripheral*> *peripheralsById;
 @property (nonatomic, strong) NSMutableSet<NSUUID*> *seenPeripheralIds;
 @property (nonatomic, strong) CBPeripheral *connectedPeripheral;
@@ -977,42 +980,43 @@ commandCompletion:(u_char)cmdType
                 @"fileCount": @((int)list.file_num),
                 @"fileNames": sample
             }];
-            // Step 2: read the FIRST file to prove one real record.
-            if (list.file_num > 0) {
-                self.probeFirstFileName = names[0];
+            // Step 3: read ALL files, one at a time (prepare -> start -> read per file).
+            self.probeAllNames = names;
+            self.probeRecords = [NSMutableArray array];
+            self.probeIndex = 0;
+            if (names.count > 0) {
                 [self.viatomUtils prepareReadFile:names[0]];   // -> VTMBLECmdStartRead
             } else {
+                [self sendEventWithName:@"onHistoryProbe" body:@{@"records": @[]}];
                 self.historyProbeActive = NO;
             }
             return;
         }
         if (cmdType == VTMBLECmdStartRead) {
-            [self.viatomUtils readFile:0];                     // -> VTMBLECmdReadFile
+            [self.viatomUtils readFile:0];   // BP records are single-chunk (~38 bytes)
             return;
         }
         if (cmdType == VTMBLECmdReadFile) {
             const uint8_t *b = (const uint8_t *)response.bytes;
             NSUInteger n = response.length;
-            // Explicit WIRE offsets for VTMBPBPResult (packed): file_version[0],
-            // file_type[1], measuring_timestamp u32 LE [2..5], reserved[6..9],
-            // status_code[10], systolic u16 LE [11..12], diastolic [13..14],
-            // mean [15..16], pulse_rate [17]. Read by offset (not memcpy) to dodge C
-            // struct-padding, and emit the raw hex so we can verify the layout on screen.
+            // Explicit WIRE offsets for VTMBPBPResult (packed): file_type[1],
+            // measuring_timestamp u32 LE [2..5], status_code[10], systolic u16 LE [11..12],
+            // diastolic [13..14], mean [15..16], pulse_rate [17], medical_result[18] (bit0=arr).
             unsigned int ftype = (n > 1) ? b[1] : 0;
-            unsigned long long ts = 0; unsigned int sys = 0, dia = 0, mean = 0, pulse = 0;
-            if (n >= 18) {
-                ts    = (unsigned long long)(b[2] | (b[3] << 8) | (b[4] << 16) | ((uint32_t)b[5] << 24));
-                sys   = b[11] | (b[12] << 8);
-                dia   = b[13] | (b[14] << 8);
-                mean  = b[15] | (b[16] << 8);
-                pulse = b[17];
+            unsigned long long ts = 0; unsigned int sys = 0, dia = 0, mean = 0, pulse = 0, status = 0, arr = 0;
+            if (n >= 19) {
+                ts     = (unsigned long long)(b[2] | (b[3] << 8) | (b[4] << 16) | ((uint32_t)b[5] << 24));
+                status = b[10];
+                sys    = b[11] | (b[12] << 8);
+                dia    = b[13] | (b[14] << 8);
+                mean   = b[15] | (b[16] << 8);
+                pulse  = b[17];
+                arr    = b[18] & 0x01;
             }
-            NSMutableString *hex = [NSMutableString string];
-            for (NSUInteger i = 0; i < n && i < 32; i++) [hex appendFormat:@"%02X ", b[i]];
-            NSLog(@"📁[HISTPROBE] file '%@' (%lu bytes) ts=%llu %u/%u pulse=%u hex=%@",
-                  self.probeFirstFileName, (unsigned long)n, ts, sys, dia, pulse, hex);
-            [self sendEventWithName:@"onHistoryProbe" body:@{
-                @"recordFile": self.probeFirstFileName ?: @"?",
+            NSString *nm = (self.probeIndex < (NSInteger)self.probeAllNames.count)
+                            ? self.probeAllNames[self.probeIndex] : @"?";
+            [self.probeRecords addObject:@{
+                @"recordName": nm,
                 @"recordSize": @((int)n),
                 @"recordFileType": @(ftype),
                 @"recordTs": @(ts),
@@ -1020,10 +1024,18 @@ commandCompletion:(u_char)cmdType
                 @"recordDia": @(dia),
                 @"recordMean": @(mean),
                 @"recordPulse": @(pulse),
-                @"recordHex": hex
+                @"recordStatus": @(status),
+                @"recordArr": @(arr)
             }];
             [self.viatomUtils endReadFile];
-            self.historyProbeActive = NO;   // Step 2 done: one record surfaced.
+            self.probeIndex++;
+            if (self.probeIndex < (NSInteger)self.probeAllNames.count) {
+                [self.viatomUtils prepareReadFile:self.probeAllNames[self.probeIndex]];
+            } else {
+                NSLog(@"📁[HISTPROBE] read %lu records", (unsigned long)self.probeRecords.count);
+                [self sendEventWithName:@"onHistoryProbe" body:@{@"records": self.probeRecords}];
+                self.historyProbeActive = NO;
+            }
             return;
         }
         NSLog(@"📁[HISTPROBE] (ignored while probing) cmdType=0x%02X len=%lu",
