@@ -64,6 +64,7 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 @property (nonatomic, assign) BOOL historyProbeActive;
 @property (nonatomic, copy) NSString *probeDeviceTime;
 @property (nonatomic, copy) NSString *probePhoneTime;
+@property (nonatomic, copy) NSString *probeFirstFileName;
 @property (nonatomic, strong) NSMutableDictionary<NSUUID*, CBPeripheral*> *peripheralsById;
 @property (nonatomic, strong) NSMutableSet<NSUUID*> *seenPeripheralIds;
 @property (nonatomic, strong) CBPeripheral *connectedPeripheral;
@@ -952,22 +953,77 @@ commandCompletion:(u_char)cmdType
     if (self.historyProbeActive) {
         if (cmdType == VTMBLECmdGetFileList) {
             VTMFileList list = [VTMBLEParser parseFileList:response];
-            NSLog(@"📁[HISTPROBE] file list: %u file(s)", (unsigned)list.file_num);
+            NSMutableArray<NSString *> *names = [NSMutableArray array];
             for (int i = 0; i < list.file_num && i < 255; i++) {
+                NSUInteger len = strnlen((const char *)list.fileName[i].str, 16);
                 NSString *name = [[NSString alloc] initWithBytes:list.fileName[i].str
-                                                          length:16
-                                                        encoding:NSASCIIStringEncoding];
-                name = [name stringByTrimmingCharactersInSet:[NSCharacterSet controlCharacterSet]];
-                NSLog(@"📁[HISTPROBE]   [%d] '%@'", i, name);
+                                                          length:len
+                                                        encoding:NSASCIIStringEncoding] ?: @"?";
+                [names addObject:name];
             }
-            NSLog(@"📁[HISTPROBE] raw file-list response (%lu bytes): %@",
-                  (unsigned long)response.length, response);
+            // first 3 + last 3 for the alert
+            NSMutableArray<NSString *> *sample = [NSMutableArray array];
+            if (names.count <= 6) {
+                [sample addObjectsFromArray:names];
+            } else {
+                [sample addObjectsFromArray:[names subarrayWithRange:NSMakeRange(0, 3)]];
+                [sample addObject:@"…"];
+                [sample addObjectsFromArray:[names subarrayWithRange:NSMakeRange(names.count - 3, 3)]];
+            }
+            NSLog(@"📁[HISTPROBE] file list: %u file(s): %@", (unsigned)list.file_num, names);
             [self sendEventWithName:@"onHistoryProbe" body:@{
                 @"deviceTime": self.probeDeviceTime ?: @"(no device-info response)",
                 @"phoneTime": self.probePhoneTime ?: [NSString stringWithFormat:@"%@", [NSDate date]],
-                @"fileCount": @((int)list.file_num)
+                @"fileCount": @((int)list.file_num),
+                @"fileNames": sample
             }];
-            self.historyProbeActive = NO;   // Step 1 stops here; Step 2 reads a file.
+            // Step 2: read the FIRST file to prove one real record.
+            if (list.file_num > 0) {
+                self.probeFirstFileName = names[0];
+                [self.viatomUtils prepareReadFile:names[0]];   // -> VTMBLECmdStartRead
+            } else {
+                self.historyProbeActive = NO;
+            }
+            return;
+        }
+        if (cmdType == VTMBLECmdStartRead) {
+            [self.viatomUtils readFile:0];                     // -> VTMBLECmdReadFile
+            return;
+        }
+        if (cmdType == VTMBLECmdReadFile) {
+            const uint8_t *b = (const uint8_t *)response.bytes;
+            NSUInteger n = response.length;
+            // Explicit WIRE offsets for VTMBPBPResult (packed): file_version[0],
+            // file_type[1], measuring_timestamp u32 LE [2..5], reserved[6..9],
+            // status_code[10], systolic u16 LE [11..12], diastolic [13..14],
+            // mean [15..16], pulse_rate [17]. Read by offset (not memcpy) to dodge C
+            // struct-padding, and emit the raw hex so we can verify the layout on screen.
+            unsigned int ftype = (n > 1) ? b[1] : 0;
+            unsigned long long ts = 0; unsigned int sys = 0, dia = 0, mean = 0, pulse = 0;
+            if (n >= 18) {
+                ts    = (unsigned long long)(b[2] | (b[3] << 8) | (b[4] << 16) | ((uint32_t)b[5] << 24));
+                sys   = b[11] | (b[12] << 8);
+                dia   = b[13] | (b[14] << 8);
+                mean  = b[15] | (b[16] << 8);
+                pulse = b[17];
+            }
+            NSMutableString *hex = [NSMutableString string];
+            for (NSUInteger i = 0; i < n && i < 32; i++) [hex appendFormat:@"%02X ", b[i]];
+            NSLog(@"📁[HISTPROBE] file '%@' (%lu bytes) ts=%llu %u/%u pulse=%u hex=%@",
+                  self.probeFirstFileName, (unsigned long)n, ts, sys, dia, pulse, hex);
+            [self sendEventWithName:@"onHistoryProbe" body:@{
+                @"recordFile": self.probeFirstFileName ?: @"?",
+                @"recordSize": @((int)n),
+                @"recordFileType": @(ftype),
+                @"recordTs": @(ts),
+                @"recordSys": @(sys),
+                @"recordDia": @(dia),
+                @"recordMean": @(mean),
+                @"recordPulse": @(pulse),
+                @"recordHex": hex
+            }];
+            [self.viatomUtils endReadFile];
+            self.historyProbeActive = NO;   // Step 2 done: one record surfaced.
             return;
         }
         NSLog(@"📁[HISTPROBE] (ignored while probing) cmdType=0x%02X len=%lu",
@@ -1225,16 +1281,11 @@ commandCompletion:(u_char)cmdType
         unsigned int devYear = (unsigned int)(t[0] | (t[1] << 8));
         NSLog(@"🕒[HISTPROBE] device cur_time = %04u-%02u-%02u %02u:%02u:%02u  |  phone now = %@",
               devYear, t[2], t[3], t[4], t[5], t[6], [NSDate date]);
-        if (self.historyProbeActive) {
-            self.probeDeviceTime = [NSString stringWithFormat:@"%04u-%02u-%02u %02u:%02u:%02u",
-                                    devYear, t[2], t[3], t[4], t[5], t[6]];
-            self.probePhoneTime = [NSString stringWithFormat:@"%@", [NSDate date]];
-            [self sendEventWithName:@"onHistoryProbe" body:@{
-                @"deviceTime": self.probeDeviceTime,
-                @"phoneTime": self.probePhoneTime,
-                @"fileCount": @(-1)
-            }];
-        }
+        // Capture the device clock EVERY time device-info arrives — it fires at CONNECT,
+        // before the probe arms — so store it unconditionally and let the probe surface it.
+        self.probeDeviceTime = [NSString stringWithFormat:@"%04u-%02u-%02u %02u:%02u:%02u",
+                                devYear, t[2], t[3], t[4], t[5], t[6]];
+        self.probePhoneTime = [NSString stringWithFormat:@"%@", [NSDate date]];
     }
     if (self.connectedPeripheral) {
         [self sendEventWithName:@"onDeviceConnected"

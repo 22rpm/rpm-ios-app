@@ -473,6 +473,8 @@ const processingRef = useRef(false);
       if (evt && evt.deviceTime) p.deviceTime = evt.deviceTime;
       if (evt && evt.phoneTime) p.phoneTime = evt.phoneTime;
       if (evt && typeof evt.fileCount === 'number' && evt.fileCount >= 0) p.fileCount = evt.fileCount;
+      if (evt && evt.fileNames) p.fileNames = evt.fileNames;
+      if (evt && evt.recordTs != null) p.record = evt;
       probeRef.current = p;
     });
     return () => { if (sub && sub.remove) sub.remove(); };
@@ -806,13 +808,24 @@ const connectionSubscription = ViatomDeviceManager.addListener('onDeviceConnecte
   setTimeout(() => ViatomDeviceManager.debugProbeHistory?.(), 1500);
   setTimeout(() => {
     const p = probeRef.current || {};
-    Alert.alert(
-      'Device history probe',
+    let msg =
       `Device time: ${p.deviceTime || '(no response)'}\n` +
       `Phone time: ${p.phoneTime || '(no response)'}\n` +
-      `Stored files: ${p.fileCount != null ? p.fileCount : '(no response)'}`
-    );
-  }, 8000);
+      `Stored files: ${p.fileCount != null ? p.fileCount : '(no response)'}\n` +
+      `Names: ${p.fileNames ? p.fileNames.join(', ') : '(none)'}`;
+    if (p.record) {
+      const r = p.record;
+      const when = r.recordTs ? new Date(r.recordTs * 1000).toISOString() : '(0)';
+      msg +=
+        `\n\nRecord [${r.recordFile}]  size=${r.recordSize}  type=${r.recordFileType}\n` +
+        `ts=${r.recordTs}  (${when})\n` +
+        `BP ${r.recordSys}/${r.recordDia}  mean ${r.recordMean}  pulse ${r.recordPulse}\n` +
+        `hex: ${r.recordHex || ''}`;
+    } else {
+      msg += `\n\nRecord: (no file read)`;
+    }
+    Alert.alert('Device history probe', msg);
+  }, 12000);
 
   // Force UI update
   setConnectedDevice(prev => ({...prev}));
