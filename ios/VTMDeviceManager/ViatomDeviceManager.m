@@ -62,6 +62,8 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 // TEMP (device-history probe, 1.0.51): gates the history file-protocol responses in
 // commandCompletion so the probe never touches the live BP flow. Remove with the probe.
 @property (nonatomic, assign) BOOL historyProbeActive;
+@property (nonatomic, copy) NSString *probeDeviceTime;
+@property (nonatomic, copy) NSString *probePhoneTime;
 @property (nonatomic, strong) NSMutableDictionary<NSUUID*, CBPeripheral*> *peripheralsById;
 @property (nonatomic, strong) NSMutableSet<NSUUID*> *seenPeripheralIds;
 @property (nonatomic, strong) CBPeripheral *connectedPeripheral;
@@ -132,7 +134,8 @@ RCT_EXPORT_MODULE();
     @"onBPConfigReceived",
     @"onBPStatusChanged",
     @"onMeasurementResult",
-    @"onReconnectFailed"
+    @"onReconnectFailed",
+    @"onHistoryProbe"
   ];
 }
 
@@ -959,6 +962,11 @@ commandCompletion:(u_char)cmdType
             }
             NSLog(@"📁[HISTPROBE] raw file-list response (%lu bytes): %@",
                   (unsigned long)response.length, response);
+            [self sendEventWithName:@"onHistoryProbe" body:@{
+                @"deviceTime": self.probeDeviceTime ?: @"(no device-info response)",
+                @"phoneTime": self.probePhoneTime ?: [NSString stringWithFormat:@"%@", [NSDate date]],
+                @"fileCount": @((int)list.file_num)
+            }];
             self.historyProbeActive = NO;   // Step 1 stops here; Step 2 reads a file.
             return;
         }
@@ -1217,6 +1225,16 @@ commandCompletion:(u_char)cmdType
         unsigned int devYear = (unsigned int)(t[0] | (t[1] << 8));
         NSLog(@"🕒[HISTPROBE] device cur_time = %04u-%02u-%02u %02u:%02u:%02u  |  phone now = %@",
               devYear, t[2], t[3], t[4], t[5], t[6], [NSDate date]);
+        if (self.historyProbeActive) {
+            self.probeDeviceTime = [NSString stringWithFormat:@"%04u-%02u-%02u %02u:%02u:%02u",
+                                    devYear, t[2], t[3], t[4], t[5], t[6]];
+            self.probePhoneTime = [NSString stringWithFormat:@"%@", [NSDate date]];
+            [self sendEventWithName:@"onHistoryProbe" body:@{
+                @"deviceTime": self.probeDeviceTime,
+                @"phoneTime": self.probePhoneTime,
+                @"fileCount": @(-1)
+            }];
+        }
     }
     if (self.connectedPeripheral) {
         [self sendEventWithName:@"onDeviceConnected"

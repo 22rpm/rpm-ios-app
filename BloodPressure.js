@@ -464,6 +464,19 @@ const processingRef = useRef(false);
   // Refs
   const toastTimeoutRef = useRef(null);
   const scanGuardRef = useRef(false);
+  // TEMP (device-history probe, 1.0.51): collects the native onHistoryProbe result so
+  // onDeviceConnected can show it in an on-screen Alert (Xcode console unavailable).
+  const probeRef = useRef({});
+  useEffect(() => {
+    const sub = ViatomDeviceManager.addListener('onHistoryProbe', (evt) => {
+      const p = probeRef.current || {};
+      if (evt && evt.deviceTime) p.deviceTime = evt.deviceTime;
+      if (evt && evt.phoneTime) p.phoneTime = evt.phoneTime;
+      if (evt && typeof evt.fileCount === 'number' && evt.fileCount >= 0) p.fileCount = evt.fileCount;
+      probeRef.current = p;
+    });
+    return () => { if (sub && sub.remove) sub.remove(); };
+  }, []);
   const connectedDeviceRef = useRef({
     name: null,
     id: null,
@@ -789,7 +802,17 @@ const connectionSubscription = ViatomDeviceManager.addListener('onDeviceConnecte
   // TEMP (device-history probe, 1.0.51): ~2s after connect, dump the device clock +
   // stored file list to the native console (Xcode). See DEVICE_HISTORY_DESIGN. Remove
   // this call and the native debugProbeHistory once readStoredRecords lands.
-  setTimeout(() => ViatomDeviceManager.debugProbeHistory?.(), 2000);
+  probeRef.current = {};
+  setTimeout(() => ViatomDeviceManager.debugProbeHistory?.(), 1500);
+  setTimeout(() => {
+    const p = probeRef.current || {};
+    Alert.alert(
+      'Device history probe',
+      `Device time: ${p.deviceTime || '(no response)'}\n` +
+      `Phone time: ${p.phoneTime || '(no response)'}\n` +
+      `Stored files: ${p.fileCount != null ? p.fileCount : '(no response)'}`
+    );
+  }, 8000);
 
   // Force UI update
   setConnectedDevice(prev => ({...prev}));
