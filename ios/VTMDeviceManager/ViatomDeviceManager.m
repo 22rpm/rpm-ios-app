@@ -117,15 +117,9 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 @implementation ViatomDeviceManager
 
 RCT_EXPORT_MODULE();
-
-// TEMP (device-history probe, 1.0.51): fires ONCE at class load — at app launch,
-// unconditionally, before any BLE or connect. If you do NOT see this line in the
-// console right after launching the app, the native binary does NOT contain the probe
-// (stale native build): Clean Build Folder (Shift-Cmd-K), delete DerivedData, rebuild.
-// Remove with the probe.
-+ (void)load {
-    NSLog(@"🧪[HISTPROBE] BUILD CONTAINS PROBE v1 — ViatomDeviceManager loaded at launch");
-}
+// NOTE: do NOT add a +load here — RCT_EXPORT_MODULE() already generates one for this
+// class (it registers the module), so a second +load is a duplicate-method build error.
+// The launch-verification NSLog lives in -init below instead.
 
 - (NSArray<NSString *> *)supportedEvents {
   return @[
@@ -158,6 +152,12 @@ RCT_EXPORT_MODULE();
 
 - (instancetype)init {
   if ((self = [super init])) {
+    // TEMP (device-history probe, 1.0.51): fires when the bridge creates this module —
+    // at app launch (the JS wrapper references it at import, so it's instantiated early),
+    // unconditionally, before any BLE/connect. If you do NOT see this line right after
+    // launch, the native binary lacks the probe (stale build): Clean Build Folder, delete
+    // DerivedData, rebuild. (Can't use +load — RCT_EXPORT_MODULE already defines one.)
+    NSLog(@"🧪[HISTPROBE] BUILD CONTAINS PROBE v1 — ViatomDeviceManager init at launch");
     NSDictionary *opts = @{
       CBCentralManagerOptionShowPowerAlertKey: @YES,
       CBCentralManagerOptionRestoreIdentifierKey: kViatomCentralRestoreId
