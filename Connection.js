@@ -36,7 +36,7 @@ function ConversationsList({ navigation }) {
     // Pop back to the caller (PatientHome or classic Home) instead of pushing the
     // OLD home via a hardcoded route.
     if (navigation?.canGoBack?.()) { navigation.goBack(); return; }
-    navigation.navigate('Home');
+    navigation.navigate('PatientHome');
   };
 
   const fetchConversations = async () => {

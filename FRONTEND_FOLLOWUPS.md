@@ -105,3 +105,28 @@ of the 1.0.50 nav work (no untested screen added to a release build).
 (a "Privacy & Security" row) or from `Profile` — then test it. If it's dead, remove the
 registration. Until then it ships as inert dead-registered code, same class as the
 `Connection` messaging screen (#3).
+
+## 5. Cuff-off jumped to OLD Home once — SYMPTOM mitigated, ROOT CAUSE UNEXPLAINED
+During 1.0.50 device verification on **build 52 (current HEAD, not a stale archive)**,
+powering the cuff off mid-session on the Blood Pressure screen caused the app to jump to
+the retired Home screen instead of staying put / on PatientHome. **It happened once and
+did NOT reproduce.**
+
+**The audit found no device-event path that can navigate.** BloodPressure.js and ECG.js
+`onDeviceDisconnected` set state and show a banner only; `onDeviceError` /
+`onReconnectFailed` show a toast + the device-picker modal; `handleBack` is the only
+`navigation.*` call in either screen and is wired **only** to the on-screen back button.
+There is no global navigation ref, no ErrorBoundary, and no session/401 → Home handler
+anywhere. So nothing in the current source explains a disconnect that navigates on its own.
+
+**What the fix does — and does NOT do.** All six back-handler fallbacks were changed from
+`navigate('Home')` to `navigate('PatientHome')` (BloodPressure.js:1078, ECG.js:162,
+Education.js:60, ArticleScreen.js:16, Readings.js:54, Connection.js:39), matching the
+Settings.js:107 fix. This retires the OLD Home as a navigation target everywhere, so the
+symptom is now **harmless** — the worst case lands on PatientHome, the real landing. **It
+does not explain the cause.** Whether a back-tap was involved during the repro is unknown
+(not remembered), which is exactly why this is recorded as open rather than closed.
+
+**If it recurs, capture:** the exact screen, whether anything was tapped (especially the
+back button), a screen recording, and the JS console/`[BLE]` log around the disconnect.
+That's what a root cause needs; absent it, this is mitigation, not a fix.

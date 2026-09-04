@@ -1075,7 +1075,7 @@ useEffect(() => {
   // Return to wherever we were pushed from (PatientHome or the classic Home),
   // not a hardcoded 'Home' route — which pushed the OLD home on top of the stack.
   const handleBack = () =>
-    navigation?.canGoBack?.() ? navigation.goBack() : navigation?.navigate?.('Home');
+    navigation?.canGoBack?.() ? navigation.goBack() : navigation?.navigate?.('PatientHome');
 
   // Error Display Component
   const renderErrorDisplay = () => {

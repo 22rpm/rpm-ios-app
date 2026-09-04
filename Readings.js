@@ -51,7 +51,7 @@ export default function Readings({ navigation }) {
       <StatusBar barStyle="light-content" backgroundColor={NAVY} />
 
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => (navigation?.canGoBack?.() ? navigation.goBack() : navigation.navigate('Home'))} accessibilityRole="button" accessibilityLabel="Back">
+        <TouchableOpacity onPress={() => (navigation?.canGoBack?.() ? navigation.goBack() : navigation.navigate('PatientHome'))} accessibilityRole="button" accessibilityLabel="Back">
           <Image source={require('./assets/icon_back.png')} style={styles.backIcon} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Your Readings</Text>

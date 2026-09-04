@@ -13,7 +13,7 @@ export default function ArticleScreen({ route, navigation }) {
   const id = route && route.params && route.params.id;
   const article = findHelpArticle(id);
 
-  const back = () => (navigation?.canGoBack?.() ? navigation.goBack() : navigation.navigate('Home'));
+  const back = () => (navigation?.canGoBack?.() ? navigation.goBack() : navigation.navigate('PatientHome'));
 
   return (
     <SafeAreaView style={styles.safe}>

@@ -57,7 +57,7 @@ export default function Education({ navigation }) {
       <StatusBar barStyle="light-content" backgroundColor={NAVY} />
       <View style={styles.header}>
         <TouchableOpacity
-          onPress={() => (navigation?.canGoBack?.() ? navigation.goBack() : navigation.navigate('Home'))}
+          onPress={() => (navigation?.canGoBack?.() ? navigation.goBack() : navigation.navigate('PatientHome'))}
           accessibilityRole="button"
           accessibilityLabel="Back"
         >
