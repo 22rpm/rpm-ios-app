@@ -118,6 +118,15 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 
 RCT_EXPORT_MODULE();
 
+// TEMP (device-history probe, 1.0.51): fires ONCE at class load — at app launch,
+// unconditionally, before any BLE or connect. If you do NOT see this line in the
+// console right after launching the app, the native binary does NOT contain the probe
+// (stale native build): Clean Build Folder (Shift-Cmd-K), delete DerivedData, rebuild.
+// Remove with the probe.
++ (void)load {
+    NSLog(@"🧪[HISTPROBE] BUILD CONTAINS PROBE v1 — ViatomDeviceManager loaded at launch");
+}
+
 - (NSArray<NSString *> *)supportedEvents {
   return @[
     @"onDeviceDiscovered",
