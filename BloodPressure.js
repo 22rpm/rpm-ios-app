@@ -786,6 +786,11 @@ const connectionSubscription = ViatomDeviceManager.addListener('onDeviceConnecte
 
   ViatomDeviceManager.stopScan?.();
 
+  // TEMP (device-history probe, 1.0.51): ~2s after connect, dump the device clock +
+  // stored file list to the native console (Xcode). See DEVICE_HISTORY_DESIGN. Remove
+  // this call and the native debugProbeHistory once readStoredRecords lands.
+  setTimeout(() => ViatomDeviceManager.debugProbeHistory?.(), 2000);
+
   // Force UI update
   setConnectedDevice(prev => ({...prev}));
 });

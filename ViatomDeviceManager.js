@@ -42,6 +42,9 @@ export default {
   // Mode Switching
   enterECGMode: () => ViatomDeviceManager.enterECGMode(),
   enterHistoryMode: () => ViatomDeviceManager.enterHistoryMode(),
+  // TEMP (device-history probe, 1.0.51): logs the device clock + stored-file list to the
+  // native console. Remove once readStoredRecords lands.
+  debugProbeHistory: () => ViatomDeviceManager.debugProbeHistory(),
 
   // Durable result outbox (readings persisted on-disk by native at parse time)
   getPendingResults: () => ViatomDeviceManager.getPendingResults(),

@@ -59,6 +59,9 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 // BLE
 @property (nonatomic, strong) CBCentralManager *centralManager;
 @property (nonatomic, strong) ViatomURATUtilsSingleton *viatomUtils;
+// TEMP (device-history probe, 1.0.51): gates the history file-protocol responses in
+// commandCompletion so the probe never touches the live BP flow. Remove with the probe.
+@property (nonatomic, assign) BOOL historyProbeActive;
 @property (nonatomic, strong) NSMutableDictionary<NSUUID*, CBPeripheral*> *peripheralsById;
 @property (nonatomic, strong) NSMutableSet<NSUUID*> *seenPeripheralIds;
 @property (nonatomic, strong) CBPeripheral *connectedPeripheral;
@@ -931,6 +934,30 @@ commandCompletion:(u_char)cmdType
  deviceType:(VTMDeviceType)deviceType
     response:(NSData *)response
 {
+    // TEMP (device-history probe, 1.0.51): while the probe runs, route the history
+    // file-protocol responses here and keep them out of the live BP flow below.
+    // Gated by historyProbeActive (NO in normal operation). Remove with the probe.
+    if (self.historyProbeActive) {
+        if (cmdType == VTMBLECmdGetFileList) {
+            VTMFileList list = [VTMBLEParser parseFileList:response];
+            NSLog(@"📁[HISTPROBE] file list: %u file(s)", (unsigned)list.file_num);
+            for (int i = 0; i < list.file_num && i < 255; i++) {
+                NSString *name = [[NSString alloc] initWithBytes:list.fileName[i].str
+                                                          length:16
+                                                        encoding:NSASCIIStringEncoding];
+                name = [name stringByTrimmingCharactersInSet:[NSCharacterSet controlCharacterSet]];
+                NSLog(@"📁[HISTPROBE]   [%d] '%@'", i, name);
+            }
+            NSLog(@"📁[HISTPROBE] raw file-list response (%lu bytes): %@",
+                  (unsigned long)response.length, response);
+            self.historyProbeActive = NO;   // Step 1 stops here; Step 2 reads a file.
+            return;
+        }
+        NSLog(@"📁[HISTPROBE] (ignored while probing) cmdType=0x%02X len=%lu",
+              cmdType, (unsigned long)response.length);
+        return;
+    }
+
     // 📊BPTRACE: raw funnel. Every command response the SDK delivers, with its
     // command byte, length, and full bytes. If a measurement's result never shows
     // up here, the loss is at/below the SDK (BLE/CRC), above anything we parse.
@@ -1172,6 +1199,16 @@ commandCompletion:(u_char)cmdType
 #pragma mark - Device info callback
 
 - (void)deviceInfo:(VTMDeviceInfo)info {
+    // TEMP (device-history probe, 1.0.51): the device's OWN clock. cur_time is a
+    // 7-byte packed date — year as a little-endian u_short, then month, day, hour,
+    // minute, second. Compare this to the phone's real time to measure drift BEFORE
+    // any syncTime (see DEVICE_HISTORY_DESIGN finding B). Remove with the probe.
+    {
+        const u_char *t = info.cur_time;
+        unsigned int devYear = (unsigned int)(t[0] | (t[1] << 8));
+        NSLog(@"🕒[HISTPROBE] device cur_time = %04u-%02u-%02u %02u:%02u:%02u  |  phone now = %@",
+              devYear, t[2], t[3], t[4], t[5], t[6], [NSDate date]);
+    }
     if (self.connectedPeripheral) {
         [self sendEventWithName:@"onDeviceConnected"
                            body:@{
@@ -1369,6 +1406,20 @@ RCT_EXPORT_METHOD(syncBPConfig:(NSDictionary *)config) {
     } @catch (NSException *exception) {
         [self handleDeviceError:VTMBLEPkgTypeFormatError command:VTMBPCmdSetConfig context:@"Config sync error"];
     }
+}
+
+// TEMP (device-history probe, 1.0.51): dump the device clock + stored-file list to the
+// console. Response is handled in commandCompletion (gated by historyProbeActive) and in
+// deviceInfo: (cur_time). Remove once the real readStoredRecords pipeline lands.
+RCT_EXPORT_METHOD(debugProbeHistory) {
+    if (!self.connectedPeripheral) {
+        NSLog(@"📁[HISTPROBE] no device connected — connect the cuff first");
+        return;
+    }
+    NSLog(@"📁[HISTPROBE] starting — requesting device info (clock) + file list");
+    self.historyProbeActive = YES;
+    [self.viatomUtils requestDeviceInfo];   // -> deviceInfo: logs cur_time
+    [self.viatomUtils requestFilelist];     // -> commandCompletion logs the file list
 }
 
 RCT_EXPORT_METHOD(requestDeviceInfo) {
