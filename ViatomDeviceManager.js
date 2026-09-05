@@ -42,9 +42,10 @@ export default {
   // Mode Switching
   enterECGMode: () => ViatomDeviceManager.enterECGMode(),
   enterHistoryMode: () => ViatomDeviceManager.enterHistoryMode(),
-  // TEMP (device-history probe, 1.0.51): logs the device clock + stored-file list to the
-  // native console. Remove once readStoredRecords lands.
-  debugProbeHistory: () => ViatomDeviceManager.debugProbeHistory(),
+  // Device-history sync: read stored records newer than sinceName (YYYYMMDDHHMMSS;
+  // '' = all) and emit them on onHistorySync. MUST stay forwarded here (see the
+  // maintenance rule at top) — the probe->sync rename broke this once already.
+  syncStoredRecords: (sinceName) => ViatomDeviceManager.syncStoredRecords(sinceName),
 
   // Durable result outbox (readings persisted on-disk by native at parse time)
   getPendingResults: () => ViatomDeviceManager.getPendingResults(),
