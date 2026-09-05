@@ -12,11 +12,21 @@
 // and resumes, deduped. There is no separate history queue file.
 
 import axios from 'axios';
+import { NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ViatomDeviceManager from './ViatomDeviceManager';
 import { DEV_DATA_BASE } from './apiConfig';
 
 const DEV_TYPE = 'bp';
+
+// Reflect the RAW native module (the compiled binary), not the JS wrapper — this is the
+// true "is syncStoredRecords in the running binary" check, independent of the wrapper
+// whitelist. Wrapper-missing and binary-missing are different failures; this tells them
+// apart.
+function nativeHasSyncStored() {
+  const raw = NativeModules && NativeModules.ViatomDeviceManager;
+  return !!(raw && typeof raw.syncStoredRecords === 'function');
+}
 
 // Persisted set of device filenames (YYYYMMDDHHMMSS, == the record's own key) we have
 // already delivered. Used two ways: (1) throttle — the newest name is passed to native
@@ -71,25 +81,33 @@ function maxName(set) {
 function readRecords(sinceName, timeoutMs = 120000) {
   return new Promise((resolve) => {
     let done = false;
-    const finish = (recs) => {
+    const finish = (recs, timedOut) => {
       if (done) return;
       done = true;
       try { sub && sub.remove && sub.remove(); } catch (e) {}
       clearTimeout(timer);
-      resolve(Array.isArray(recs) ? recs : []);
+      resolve({ records: Array.isArray(recs) ? recs : [], timedOut: !!timedOut });
     };
     const sub = ViatomDeviceManager.addListener('onHistorySync', (evt) => {
-      if (evt && Array.isArray(evt.records)) finish(evt.records);
+      if (evt && Array.isArray(evt.records)) finish(evt.records, false);
     });
     const timer = setTimeout(() => {
       console.warn('[histSync] read timed out — leaving records on device for next connect');
-      finish([]);
+      finish([], true);
     }, timeoutMs);
+    // Distinguish the two silent-failure layers: wrapper-missing (JS whitelist) vs
+    // binary-missing (stale native). The wrapper forwards to the raw module; if the raw
+    // module lacks the method the wrapper's bare call throws (caught below).
+    if (typeof ViatomDeviceManager.syncStoredRecords !== 'function') {
+      console.warn('[histSync] WRAPPER is missing syncStoredRecords — update ViatomDeviceManager.js');
+    } else if (!nativeHasSyncStored()) {
+      console.warn('[histSync] native binary is MISSING syncStoredRecords — stale binary, clean-build');
+    }
     try {
       ViatomDeviceManager.syncStoredRecords?.(sinceName || '');
     } catch (e) {
       console.warn('[histSync] syncStoredRecords threw:', e?.message);
-      finish([]);
+      finish([], false);
     }
   });
 }
@@ -211,22 +229,46 @@ function isConfirmedSuccess(res) {
 // `device` = { id, name } of the connected cuff. `onProgress(posted, total)` is optional.
 // Returns { posted, dropped, kept, skipped } — never throws.
 export async function syncHistory(device, { days = 30, onProgress } = {}) {
-  if (syncing) return { skipped: 'in-progress' };
+  if (syncing) return { skipped: 'in-progress', diag: { skipped: 'in-progress' } };
   syncing = true;
+  // TEMP DIAGNOSTIC (device-history bring-up): every field the on-screen alert needs to
+  // name the exact outcome/failure path. Remove once sync is confirmed on device.
+  const diag = {
+    wrapperHasSync: typeof ViatomDeviceManager.syncStoredRecords === 'function',
+    nativeHasSync: nativeHasSyncStored(),
+    syncedSetSize: 0, sinceName: '', recordsRead: 0, timedOut: false,
+    valid: 0, fresh: 0, serverRows: 0, dropped: 0, posted: 0, kept: 0, skipped: null,
+  };
   try {
     const synced = await loadSyncedNames();
+    diag.syncedSetSize = synced.size;
     const sinceName = maxName(synced);
+    diag.sinceName = sinceName;
 
-    const records = await readRecords(sinceName);
-    if (!records.length) return { posted: 0, dropped: 0, kept: 0 };
+    const { records, timedOut } = await readRecords(sinceName);
+    diag.recordsRead = records.length;
+    diag.timedOut = timedOut;
+    if (!records.length) {
+      diag.skipped = timedOut ? 'native-timeout' : 'no-records';
+      return { posted: 0, dropped: 0, kept: 0, skipped: diag.skipped, diag };
+    }
 
     const valid = records.filter(isValidRecord);
+    diag.valid = valid.length;
     // Drop anything we've already delivered (idempotency / re-read of the same ring).
     const fresh = valid.filter((r) => !synced.has(String(r.recordName)));
-    if (!fresh.length) return { posted: 0, dropped: 0, kept: 0 };
+    diag.fresh = fresh.length;
+    if (!fresh.length) {
+      diag.skipped = 'all-already-synced';
+      return { posted: 0, dropped: 0, kept: 0, skipped: diag.skipped, diag };
+    }
 
     const serverRows = await fetchServerRows(days);
-    if (serverRows === null) return { posted: 0, dropped: 0, kept: fresh.length, skipped: 'no-server-list' };
+    if (serverRows === null) {
+      diag.skipped = 'no-server-list';
+      return { posted: 0, dropped: 0, kept: fresh.length, skipped: diag.skipped, diag };
+    }
+    diag.serverRows = serverRows.length;
 
     const { survivors, droppedNames } = applyOverlapGuard(fresh, serverRows);
     survivors.sort((a, b) => a.recordTs - b.recordTs);
@@ -273,8 +315,11 @@ export async function syncHistory(device, { days = 30, onProgress } = {}) {
     }
 
     await saveSyncedNames(synced);
+    diag.dropped = dropped;
+    diag.posted = posted;
+    diag.kept = kept;
     console.log(`[histSync] done: posted=${posted} dropped=${dropped} kept=${kept}`);
-    return { posted, dropped, kept };
+    return { posted, dropped, kept, diag };
   } finally {
     syncing = false;
   }

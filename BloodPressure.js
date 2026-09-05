@@ -12,6 +12,7 @@ import {
   Alert,
   Modal,
   RefreshControl,
+  NativeModules,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -802,18 +803,37 @@ const connectionSubscription = ViatomDeviceManager.addListener('onDeviceConnecte
     if (realTimeData && realTimeData.phase && realTimeData.phase !== 'done') return; // not mid-measurement
     syncGuardRef.current = true;
     setSyncStatus('Syncing past readings…');
+    // TEMP DIAGNOSTIC (device-history bring-up): a start alert that fires REGARDLESS of
+    // whether sync finds/posts anything — proves this build contains the sync JS and the
+    // path ran. If you don't see this on connect, the archive is stale. Remove once green.
+    Alert.alert('History sync v2',
+      `Starting…\n` +
+      `wrapper forwards: ${typeof ViatomDeviceManager.syncStoredRecords === 'function'}\n` +
+      `native binary has it: ${!!(NativeModules.ViatomDeviceManager && typeof NativeModules.ViatomDeviceManager.syncStoredRecords === 'function')}`);
     syncHistory({ id: device.id, name: device.name }, {
       days: 30,
       onProgress: (posted, total) => setSyncStatus(`Syncing past readings… ${posted}/${total}`),
     })
       .then((res) => {
+        const d = (res && res.diag) || {};
+        // TEMP DIAGNOSTIC: full breakdown so we can see WHICH path fired.
+        Alert.alert('History sync result',
+          `wrapperHasSync: ${d.wrapperHasSync}  nativeHasSync: ${d.nativeHasSync}\n` +
+          `syncedSet: ${d.syncedSetSize}  sinceName: ${d.sinceName || '(empty)'}\n` +
+          `recordsRead: ${d.recordsRead}  timedOut: ${d.timedOut}\n` +
+          `valid: ${d.valid}  fresh: ${d.fresh}  serverRows: ${d.serverRows}\n` +
+          `dropped: ${d.dropped}  posted: ${d.posted}  kept: ${d.kept}\n` +
+          `skipped: ${d.skipped || '(none)'}`);
         const posted = (res && res.posted) || 0;
         if (posted > 0) {
           showToastMessage(`Added ${posted} past reading${posted === 1 ? '' : 's'}`, 3000);
           loadHistoricalData(filterDays);
         }
       })
-      .catch((e) => console.warn('[BP] history sync error:', e?.message))
+      .catch((e) => {
+        Alert.alert('History sync ERROR', String(e?.message || e));
+        console.warn('[BP] history sync error:', e?.message);
+      })
       .finally(() => {
         setSyncStatus(null);
         syncGuardRef.current = false;
