@@ -27,6 +27,7 @@ import globalStyles from './globalStyles';
 import ViatomDeviceManager from './ViatomDeviceManager';
 import axios from 'axios';
 import { drainOutbox } from './outbox';
+import { syncHistory } from './historySync';
 import ReadingConfirmation from './ReadingConfirmation';
 import { DEV_DATA_BASE } from './apiConfig';
 
@@ -464,25 +465,11 @@ const processingRef = useRef(false);
   // Refs
   const toastTimeoutRef = useRef(null);
   const scanGuardRef = useRef(false);
-  // TEMP (device-history probe, 1.0.51): collects the native onHistoryProbe result so
-  // onDeviceConnected can show it in an on-screen Alert (Xcode console unavailable).
-  const probeRef = useRef({});
-  const [probeList, setProbeList] = useState(null);
-  useEffect(() => {
-    const sub = ViatomDeviceManager.addListener('onHistoryProbe', (evt) => {
-      const p = probeRef.current || {};
-      if (evt && evt.deviceTime) p.deviceTime = evt.deviceTime;
-      if (evt && evt.phoneTime) p.phoneTime = evt.phoneTime;
-      if (evt && typeof evt.fileCount === 'number' && evt.fileCount >= 0) p.fileCount = evt.fileCount;
-      if (evt && evt.fileNames) p.fileNames = evt.fileNames;
-      probeRef.current = p;
-      if (evt && Array.isArray(evt.records)) {
-        p.gotRecords = true;
-        setProbeList({ header: { ...p }, rows: evt.records });
-      }
-    });
-    return () => { if (sub && sub.remove) sub.remove(); };
-  }, []);
+  // Device-history sync: a subtle inline status while the cuff's stored readings are
+  // read + delivered on connect. The onHistorySync event is consumed inside
+  // historySync.js; this screen only drives the status text + the completion toast.
+  const [syncStatus, setSyncStatus] = useState(null); // null | 'syncing' | done text
+  const syncGuardRef = useRef(false);
   const connectedDeviceRef = useRef({
     name: null,
     id: null,
@@ -805,24 +792,33 @@ const connectionSubscription = ViatomDeviceManager.addListener('onDeviceConnecte
 
   ViatomDeviceManager.stopScan?.();
 
-  // TEMP (device-history probe, 1.0.51): ~2s after connect, dump the device clock +
-  // stored file list to the native console (Xcode). See DEVICE_HISTORY_DESIGN. Remove
-  // this call and the native debugProbeHistory once readStoredRecords lands.
-  probeRef.current = { gotRecords: false };
-  setProbeList(null);
-  setTimeout(() => ViatomDeviceManager.debugProbeHistory?.(), 1500);
-  // Reading all 50 files takes many BLE round-trips; the scrollable list opens when the
-  // batch arrives (setProbeList). This is only a fallback if the read stalls.
+  // Device-history sync: ~1.5s after connect (once the link settles, before the patient
+  // starts a measurement), read the cuff's stored readings and deliver any we don't
+  // already have — this is how readings taken with the app closed reach the server, each
+  // dated to its real measurement time. Runs once per connect; historySync.js handles
+  // dedupe, the overlap guard, posting and throttling.
   setTimeout(() => {
-    const p = probeRef.current || {};
-    if (!p.gotRecords) {
-      Alert.alert('Device history probe',
-        `Device time: ${p.deviceTime || '(no response)'}\n` +
-        `Phone time: ${p.phoneTime || '(no response)'}\n` +
-        `Stored files: ${p.fileCount != null ? p.fileCount : '(no response)'}\n` +
-        `Records: not received (read may have stalled)`);
-    }
-  }, 90000);
+    if (syncGuardRef.current) return;      // one sync per connect
+    if (realTimeData && realTimeData.phase && realTimeData.phase !== 'done') return; // not mid-measurement
+    syncGuardRef.current = true;
+    setSyncStatus('Syncing past readings…');
+    syncHistory({ id: device.id, name: device.name }, {
+      days: 30,
+      onProgress: (posted, total) => setSyncStatus(`Syncing past readings… ${posted}/${total}`),
+    })
+      .then((res) => {
+        const posted = (res && res.posted) || 0;
+        if (posted > 0) {
+          showToastMessage(`Added ${posted} past reading${posted === 1 ? '' : 's'}`, 3000);
+          loadHistoricalData(filterDays);
+        }
+      })
+      .catch((e) => console.warn('[BP] history sync error:', e?.message))
+      .finally(() => {
+        setSyncStatus(null);
+        syncGuardRef.current = false;
+      });
+  }, 1500);
 
   // Force UI update
   setConnectedDevice(prev => ({...prev}));
@@ -1553,34 +1549,11 @@ const renderDeviceConnectionModal = () => (
 
   return (
     <View style={styles.container}>
-      {/* TEMP (device-history probe, 1.0.51): scrollable dump of all stored records. */}
-      {probeList && (
-        <Modal visible transparent animationType="slide" onRequestClose={() => setProbeList(null)}>
-          <View style={{ flex: 1, backgroundColor: '#000000cc', paddingTop: 50 }}>
-            <View style={{ flex: 1, margin: 10, backgroundColor: '#fff', borderRadius: 8, padding: 10 }}>
-              <Text style={{ fontWeight: 'bold', marginBottom: 4 }}>
-                History probe — {probeList.rows.length} records
-              </Text>
-              <Text style={{ fontSize: 11, color: '#555', marginBottom: 6 }}>
-                device {probeList.header.deviceTime || '?'} · phone {probeList.header.phoneTime || '?'} · files {probeList.header.fileCount}
-              </Text>
-              <ScrollView style={{ flex: 1 }}>
-                {probeList.rows.map((r, i) => {
-                  const d = r.recordTs ? new Date(r.recordTs * 1000).toISOString().replace('.000Z', 'Z') : '(0)';
-                  const bad = (r.recordSys === 0 && r.recordDia === 0) || r.recordStatus !== 0;
-                  return (
-                    <Text key={i} style={{ fontSize: 11, marginBottom: 2, color: bad ? '#c00' : '#111' }}>
-                      {i + 1}. {d}  {r.recordSys}/{r.recordDia} m{r.recordMean} p{r.recordPulse}  st{r.recordStatus} ar{r.recordArr} t{r.recordFileType} {r.recordSize}b
-                    </Text>
-                  );
-                })}
-              </ScrollView>
-              <TouchableOpacity onPress={() => setProbeList(null)} style={{ padding: 12, alignItems: 'center' }}>
-                <Text style={{ color: '#013550', fontWeight: 'bold' }}>Close</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
+      {/* Device-history sync: subtle non-blocking status while stored readings deliver. */}
+      {syncStatus && (
+        <View style={{ backgroundColor: '#eef4f7', paddingVertical: 6, paddingHorizontal: 12, alignItems: 'center' }}>
+          <Text style={{ fontSize: 12, color: '#013550' }}>{syncStatus}</Text>
+        </View>
       )}
       <SafeAreaView edges={['top']} style={{ backgroundColor: globalStyles.primaryColor.color }}>
         <View style={styles.header}>

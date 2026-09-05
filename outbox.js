@@ -22,6 +22,19 @@ const DEV_TYPE = 'bp';
 // avoids redundant POSTs of the same row.
 let draining = false;
 
+// measured_at (epoch SECONDS) = the reading's true MEASUREMENT time, baked once by
+// native at capture. rec.measuredAt is set from the device's own measuring_timestamp
+// for history-synced records (PR B); for a live reading the device frame
+// (VTMBPEndMeasureData) has no clock, so we fall back to rec.timestamp — the phone
+// capture time baked at measurement, NOT the drain time. Never null: a queued reading
+// that drains late still dates to when the patient measured, not when it was delivered.
+function measuredAtEpoch(rec) {
+  if (Number.isFinite(rec.measuredAt) && rec.measuredAt > 0) return Math.floor(rec.measuredAt);
+  const t = Date.parse(rec.timestamp);
+  if (!Number.isNaN(t)) return Math.floor(t / 1000);
+  return Math.floor(Date.now() / 1000);
+}
+
 function buildBody(rec) {
   const d = new Date(rec.timestamp);
   const valid = !isNaN(d.getTime());
@@ -36,6 +49,7 @@ function buildBody(rec) {
       pulse: rec.pulse,
       mean: rec.mean,
       timestamp: rec.timestamp, // baked by native — the dedup key
+      measured_at: measuredAtEpoch(rec), // epoch s — measurement time, not receipt
       date: valid ? d.toLocaleDateString() : undefined,
       time: valid ? d.toLocaleTimeString() : undefined,
       deviceInfo: {

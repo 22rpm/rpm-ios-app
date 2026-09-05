@@ -59,15 +59,16 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 // BLE
 @property (nonatomic, strong) CBCentralManager *centralManager;
 @property (nonatomic, strong) ViatomURATUtilsSingleton *viatomUtils;
-// TEMP (device-history probe, 1.0.51): gates the history file-protocol responses in
-// commandCompletion so the probe never touches the live BP flow. Remove with the probe.
-@property (nonatomic, assign) BOOL historyProbeActive;
+// Device-history sync: gates the history file-protocol responses in commandCompletion
+// so the stored-record read never touches the live BP flow. Active only during a sync.
+@property (nonatomic, assign) BOOL historySyncActive;
 @property (nonatomic, copy) NSString *probeDeviceTime;
 @property (nonatomic, copy) NSString *probePhoneTime;
 @property (nonatomic, copy) NSString *probeFirstFileName;
-@property (nonatomic, strong) NSMutableArray<NSString *> *probeAllNames;
-@property (nonatomic, strong) NSMutableArray *probeRecords;
-@property (nonatomic, assign) NSInteger probeIndex;
+@property (nonatomic, copy) NSString *syncSinceName;   // read only files with name > this (throttle)
+@property (nonatomic, strong) NSMutableArray<NSString *> *syncNames;
+@property (nonatomic, strong) NSMutableArray *syncRecords;
+@property (nonatomic, assign) NSInteger syncIndex;
 @property (nonatomic, strong) NSMutableDictionary<NSUUID*, CBPeripheral*> *peripheralsById;
 @property (nonatomic, strong) NSMutableSet<NSUUID*> *seenPeripheralIds;
 @property (nonatomic, strong) CBPeripheral *connectedPeripheral;
@@ -139,7 +140,7 @@ RCT_EXPORT_MODULE();
     @"onBPStatusChanged",
     @"onMeasurementResult",
     @"onReconnectFailed",
-    @"onHistoryProbe"
+    @"onHistorySync"
   ];
 }
 
@@ -950,10 +951,11 @@ commandCompletion:(u_char)cmdType
  deviceType:(VTMDeviceType)deviceType
     response:(NSData *)response
 {
-    // TEMP (device-history probe, 1.0.51): while the probe runs, route the history
-    // file-protocol responses here and keep them out of the live BP flow below.
-    // Gated by historyProbeActive (NO in normal operation). Remove with the probe.
-    if (self.historyProbeActive) {
+    // Device-history sync: while a sync runs, route the history file-protocol responses
+    // here and keep them out of the live BP flow below. Gated by historySyncActive (NO
+    // in normal operation), so the stored-record read never interferes with a live
+    // measurement.
+    if (self.historySyncActive) {
         if (cmdType == VTMBLECmdGetFileList) {
             VTMFileList list = [VTMBLEParser parseFileList:response];
             NSMutableArray<NSString *> *names = [NSMutableArray array];
@@ -962,33 +964,31 @@ commandCompletion:(u_char)cmdType
                 NSString *name = [[NSString alloc] initWithBytes:list.fileName[i].str
                                                           length:len
                                                         encoding:NSASCIIStringEncoding] ?: @"?";
+                // THROTTLE: skip files we've already synced. Filenames are
+                // YYYYMMDDHHMMSS, so a lexical '>' compare == chronological. An empty
+                // syncSinceName (first sync) keeps everything.
+                if (self.syncSinceName.length > 0 && [name compare:self.syncSinceName] != NSOrderedDescending) {
+                    continue;
+                }
                 [names addObject:name];
             }
-            // first 3 + last 3 for the alert
-            NSMutableArray<NSString *> *sample = [NSMutableArray array];
-            if (names.count <= 6) {
-                [sample addObjectsFromArray:names];
-            } else {
-                [sample addObjectsFromArray:[names subarrayWithRange:NSMakeRange(0, 3)]];
-                [sample addObject:@"…"];
-                [sample addObjectsFromArray:[names subarrayWithRange:NSMakeRange(names.count - 3, 3)]];
-            }
-            NSLog(@"📁[HISTPROBE] file list: %u file(s): %@", (unsigned)list.file_num, names);
-            [self sendEventWithName:@"onHistoryProbe" body:@{
-                @"deviceTime": self.probeDeviceTime ?: @"(no device-info response)",
-                @"phoneTime": self.probePhoneTime ?: [NSString stringWithFormat:@"%@", [NSDate date]],
-                @"fileCount": @((int)list.file_num),
-                @"fileNames": sample
+            NSLog(@"📁[HISTSYNC] file list: %u total, %lu newer than '%@'",
+                  (unsigned)list.file_num, (unsigned long)names.count, self.syncSinceName ?: @"");
+            // Header event (fileCount/fileNames) — informational; JS resolves on the
+            // records batch below. fileCount here is the count AFTER the throttle filter.
+            [self sendEventWithName:@"onHistorySync" body:@{
+                @"fileCount": @((int)names.count),
+                @"fileNames": names
             }];
-            // Step 3: read ALL files, one at a time (prepare -> start -> read per file).
-            self.probeAllNames = names;
-            self.probeRecords = [NSMutableArray array];
-            self.probeIndex = 0;
+            // Read each surviving file, one at a time (prepare -> start -> read).
+            self.syncNames = names;
+            self.syncRecords = [NSMutableArray array];
+            self.syncIndex = 0;
             if (names.count > 0) {
                 [self.viatomUtils prepareReadFile:names[0]];   // -> VTMBLECmdStartRead
             } else {
-                [self sendEventWithName:@"onHistoryProbe" body:@{@"records": @[]}];
-                self.historyProbeActive = NO;
+                [self sendEventWithName:@"onHistorySync" body:@{@"records": @[]}];
+                self.historySyncActive = NO;
             }
             return;
         }
@@ -1013,9 +1013,9 @@ commandCompletion:(u_char)cmdType
                 pulse  = b[17];
                 arr    = b[18] & 0x01;
             }
-            NSString *nm = (self.probeIndex < (NSInteger)self.probeAllNames.count)
-                            ? self.probeAllNames[self.probeIndex] : @"?";
-            [self.probeRecords addObject:@{
+            NSString *nm = (self.syncIndex < (NSInteger)self.syncNames.count)
+                            ? self.syncNames[self.syncIndex] : @"?";
+            [self.syncRecords addObject:@{
                 @"recordName": nm,
                 @"recordSize": @((int)n),
                 @"recordFileType": @(ftype),
@@ -1028,17 +1028,17 @@ commandCompletion:(u_char)cmdType
                 @"recordArr": @(arr)
             }];
             [self.viatomUtils endReadFile];
-            self.probeIndex++;
-            if (self.probeIndex < (NSInteger)self.probeAllNames.count) {
-                [self.viatomUtils prepareReadFile:self.probeAllNames[self.probeIndex]];
+            self.syncIndex++;
+            if (self.syncIndex < (NSInteger)self.syncNames.count) {
+                [self.viatomUtils prepareReadFile:self.syncNames[self.syncIndex]];
             } else {
-                NSLog(@"📁[HISTPROBE] read %lu records", (unsigned long)self.probeRecords.count);
-                [self sendEventWithName:@"onHistoryProbe" body:@{@"records": self.probeRecords}];
-                self.historyProbeActive = NO;
+                NSLog(@"📁[HISTSYNC] read %lu records", (unsigned long)self.syncRecords.count);
+                [self sendEventWithName:@"onHistorySync" body:@{@"records": self.syncRecords}];
+                self.historySyncActive = NO;
             }
             return;
         }
-        NSLog(@"📁[HISTPROBE] (ignored while probing) cmdType=0x%02X len=%lu",
+        NSLog(@"📁[HISTSYNC] (ignored while syncing) cmdType=0x%02X len=%lu",
               cmdType, (unsigned long)response.length);
         return;
     }
@@ -1498,18 +1498,22 @@ RCT_EXPORT_METHOD(syncBPConfig:(NSDictionary *)config) {
     }
 }
 
-// TEMP (device-history probe, 1.0.51): dump the device clock + stored-file list to the
-// console. Response is handled in commandCompletion (gated by historyProbeActive) and in
-// deviceInfo: (cur_time). Remove once the real readStoredRecords pipeline lands.
-RCT_EXPORT_METHOD(debugProbeHistory) {
+// Device-history sync: read the cuff's stored readings NEWER than `sinceName`
+// (YYYYMMDDHHMMSS; empty = read all), parse each, and emit them to JS on
+// `onHistorySync`. The read is handled in commandCompletion (gated by
+// historySyncActive). JS (historySync.js) owns dedupe, the overlap guard, posting and
+// persistence. No device-info call here — the stored records carry their own
+// measuring_timestamp, so the sync doesn't depend on the (unreliable) live clock read.
+RCT_EXPORT_METHOD(syncStoredRecords:(NSString *)sinceName) {
     if (!self.connectedPeripheral) {
-        NSLog(@"📁[HISTPROBE] no device connected — connect the cuff first");
+        NSLog(@"📁[HISTSYNC] no device connected — connect the cuff first");
+        [self sendEventWithName:@"onHistorySync" body:@{@"records": @[]}];
         return;
     }
-    NSLog(@"📁[HISTPROBE] starting — requesting device info (clock) + file list");
-    self.historyProbeActive = YES;
-    [self.viatomUtils requestDeviceInfo];   // -> deviceInfo: logs cur_time
-    [self.viatomUtils requestFilelist];     // -> commandCompletion logs the file list
+    self.syncSinceName = [sinceName isKindOfClass:[NSString class]] ? sinceName : @"";
+    NSLog(@"📁[HISTSYNC] starting — reading files newer than '%@'", self.syncSinceName);
+    self.historySyncActive = YES;
+    [self.viatomUtils requestFilelist];     // -> commandCompletion reads each file
 }
 
 RCT_EXPORT_METHOD(requestDeviceInfo) {

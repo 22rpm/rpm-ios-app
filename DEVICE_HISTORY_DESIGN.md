@@ -305,3 +305,35 @@ gate comes first. Never `deleteFile` from the ring; idempotency comes from dedup
 2. iOS live path: send `measured_at` from the device timestamp (fixes go-forward dedup + #16).
 3. iOS history sync: `readStoredRecords` → filter invalid → dedup (query above) → POST via the
    durable outbox. Only now does the app write backfilled data.
+
+## AS BUILT (feature/device-history) — differences from the scope above
+
+The pipeline is now built (`historySync.js`, native `syncStoredRecords:`). Two design points
+landed differently than scoped, both deliberately:
+
+- **Direct POST, not the live outbox.** History records POST straight to
+  `/devices/data` (one per request), not through `bp_outbox.json`. The DEVICE ring buffer
+  IS the durability layer: on any post failure we STOP and leave the rest on the device, and
+  the next connect re-reads and resumes. Server idempotency (`user_id, dev_type, data.timestamp`
+  with `timestamp` = ISO of the record's `measuring_timestamp`) makes re-posts free.
+- **Dedup = local synced-name set + a one-to-one overlap guard against `getUserReadingData`.**
+  The guard matches each ring record to the *nearest unconsumed* server row with identical
+  `(sys,dia,pulse)` within **±90 s**, one-to-one, so a single live reading can never suppress
+  two genuine ring records (the 30-s-apart-identical case). Every drop is logged with both sides.
+
+### ⚠️ Hard dependency: history sync stops silently if `getUserReadingData` breaks
+
+The overlap guard needs the server's existing readings. If that GET fails (endpoint down, auth
+expired, 5xx), `syncHistory` **skips the whole sync** (`skipped:'no-server-list'`) rather than
+posting blind duplicates of every live reading. This is the right trade — skipping beats
+double-posting — **but it means a broken `getUserReadingData` silently halts all history
+backfill**, with no user-visible signal. That is exactly the silent-stoppage failure shape the
+prod handoff warns about (uncommitted/undeployed drift going unnoticed).
+
+**What would make it visible** (not built yet — follow-up):
+- Surface the `skipped` reason to the BP screen (a one-line "Couldn't sync past readings —
+  will retry" instead of silence), so a persistent skip is noticeable to the patient/clinician.
+- Log/telemeter the skip count; a rising `no-server-list` rate is the alarm that the endpoint
+  (or its nginx route) is down — the same class of monitor the cert/nginx incident lacked.
+- Optional: a staleness surface like `oldestPendingAgeMs` (outbox) — "device has N unsynced
+  readings older than X" — so a stalled backfill shows up even when the app looks healthy.
