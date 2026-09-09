@@ -76,30 +76,54 @@ function maxName(set) {
 
 // Trigger native to read the stored records newer than `sinceName`, and resolve with
 // the parsed record array. Native emits `onHistorySync` possibly twice: a header event
-// (fileCount/fileNames, no `records`) and a final batch event (with `records`). We
-// resolve on the batch, or [] on a bounded timeout (a stalled read must not hang sync).
+// (fileCount/fileNames, no `records`) and a final batch event (with `records`). Resolves
+// on the batch, or early with [] on device disconnect (the read cannot finish once the
+// cuff is gone — e.g. it powers off mid-read), or on a bounded timeout as a last-resort
+// backstop for a read that stalls while still connected. NEVER hangs: a mid-sync
+// disconnect resolves in ~1 BLE callback, not after the full timeout.
+//
+// `reason` = 'records' | 'disconnect' | 'timeout' | 'wrapper-missing' | 'threw'.
+//
+// timeoutMs is a GENEROUS backstop, not the primary guard: a full 50-file read is many
+// BLE round-trips and can legitimately take ~60-90s, so a tight timeout would abort a
+// working read. The disconnect handler is what makes the common failure (cuff powered
+// off / out of range) resolve fast; the timeout only catches a stall while still linked.
 function readRecords(sinceName, timeoutMs = 120000) {
   return new Promise((resolve) => {
     let done = false;
-    const finish = (recs, timedOut) => {
+    const finish = (recs, reason) => {
       if (done) return;
       done = true;
-      try { sub && sub.remove && sub.remove(); } catch (e) {}
+      try { subHistory && subHistory.remove && subHistory.remove(); } catch (e) {}
+      try { subDisconnect && subDisconnect.remove && subDisconnect.remove(); } catch (e) {}
       clearTimeout(timer);
-      resolve({ records: Array.isArray(recs) ? recs : [], timedOut: !!timedOut });
+      resolve({
+        records: Array.isArray(recs) ? recs : [],
+        reason,
+        timedOut: reason === 'timeout',
+        disconnected: reason === 'disconnect',
+      });
     };
-    const sub = ViatomDeviceManager.addListener('onHistorySync', (evt) => {
-      if (evt && Array.isArray(evt.records)) finish(evt.records, false);
+    const subHistory = ViatomDeviceManager.addListener('onHistorySync', (evt) => {
+      if (evt && Array.isArray(evt.records)) finish(evt.records, 'records');
+    });
+    // Device gone mid-read (powered off, out of range, cuff died): native will emit no
+    // further onHistorySync, so bail immediately instead of waiting out the timeout.
+    // Whatever wasn't read stays on the device and resumes on the next connect.
+    const subDisconnect = ViatomDeviceManager.addListener('onDeviceDisconnected', () => {
+      console.warn('[histSync] device disconnected mid-read — aborting, records stay on device');
+      finish([], 'disconnect');
     });
     const timer = setTimeout(() => {
       console.warn('[histSync] read timed out — leaving records on device for next connect');
-      finish([], true);
+      finish([], 'timeout');
     }, timeoutMs);
     // Distinguish the two silent-failure layers: wrapper-missing (JS whitelist) vs
     // binary-missing (stale native). The wrapper forwards to the raw module; if the raw
     // module lacks the method the wrapper's bare call throws (caught below).
     if (typeof ViatomDeviceManager.syncStoredRecords !== 'function') {
       console.warn('[histSync] WRAPPER is missing syncStoredRecords — update ViatomDeviceManager.js');
+      return finish([], 'wrapper-missing');
     } else if (!nativeHasSyncStored()) {
       console.warn('[histSync] native binary is MISSING syncStoredRecords — stale binary, clean-build');
     }
@@ -107,7 +131,7 @@ function readRecords(sinceName, timeoutMs = 120000) {
       ViatomDeviceManager.syncStoredRecords?.(sinceName || '');
     } catch (e) {
       console.warn('[histSync] syncStoredRecords threw:', e?.message);
-      finish([], false);
+      finish([], 'threw');
     }
   });
 }
@@ -236,7 +260,8 @@ export async function syncHistory(device, { days = 30, onProgress } = {}) {
   const diag = {
     wrapperHasSync: typeof ViatomDeviceManager.syncStoredRecords === 'function',
     nativeHasSync: nativeHasSyncStored(),
-    syncedSetSize: 0, sinceName: '', recordsRead: 0, timedOut: false,
+    syncedSetSize: 0, sinceName: '', recordsRead: 0, readReason: null,
+    timedOut: false, disconnected: false,
     valid: 0, fresh: 0, serverRows: 0, dropped: 0, posted: 0, kept: 0, skipped: null,
   };
   try {
@@ -245,11 +270,15 @@ export async function syncHistory(device, { days = 30, onProgress } = {}) {
     const sinceName = maxName(synced);
     diag.sinceName = sinceName;
 
-    const { records, timedOut } = await readRecords(sinceName);
+    const { records, reason, timedOut, disconnected } = await readRecords(sinceName);
     diag.recordsRead = records.length;
+    diag.readReason = reason;
     diag.timedOut = timedOut;
+    diag.disconnected = disconnected;
     if (!records.length) {
-      diag.skipped = timedOut ? 'native-timeout' : 'no-records';
+      // Map the read outcome to a skip label. 'read-<reason>' keeps the cause visible
+      // (disconnect / timeout / wrapper-missing / threw / no-records) without hanging.
+      diag.skipped = `read-${reason || 'empty'}`;
       return { posted: 0, dropped: 0, kept: 0, skipped: diag.skipped, diag };
     }
 

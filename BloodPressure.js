@@ -820,7 +820,8 @@ const connectionSubscription = ViatomDeviceManager.addListener('onDeviceConnecte
         Alert.alert('History sync result',
           `wrapperHasSync: ${d.wrapperHasSync}  nativeHasSync: ${d.nativeHasSync}\n` +
           `syncedSet: ${d.syncedSetSize}  sinceName: ${d.sinceName || '(empty)'}\n` +
-          `recordsRead: ${d.recordsRead}  timedOut: ${d.timedOut}\n` +
+          `recordsRead: ${d.recordsRead}  readReason: ${d.readReason || '-'}\n` +
+          `timedOut: ${d.timedOut}  disconnected: ${d.disconnected}\n` +
           `valid: ${d.valid}  fresh: ${d.fresh}  serverRows: ${d.serverRows}\n` +
           `dropped: ${d.dropped}  posted: ${d.posted}  kept: ${d.kept}\n` +
           `skipped: ${d.skipped || '(none)'}`);
