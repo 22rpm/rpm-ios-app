@@ -97,12 +97,7 @@ function readRecords(sinceName, timeoutMs = 120000) {
       try { subHistory && subHistory.remove && subHistory.remove(); } catch (e) {}
       try { subDisconnect && subDisconnect.remove && subDisconnect.remove(); } catch (e) {}
       clearTimeout(timer);
-      resolve({
-        records: Array.isArray(recs) ? recs : [],
-        reason,
-        timedOut: reason === 'timeout',
-        disconnected: reason === 'disconnect',
-      });
+      resolve({ records: Array.isArray(recs) ? recs : [], reason });
     };
     const subHistory = ViatomDeviceManager.addListener('onHistorySync', (evt) => {
       if (evt && Array.isArray(evt.records)) finish(evt.records, 'records');
@@ -253,51 +248,26 @@ function isConfirmedSuccess(res) {
 // `device` = { id, name } of the connected cuff. `onProgress(posted, total)` is optional.
 // Returns { posted, dropped, kept, skipped } — never throws.
 export async function syncHistory(device, { days = 30, onProgress } = {}) {
-  if (syncing) return { skipped: 'in-progress', diag: { skipped: 'in-progress' } };
+  if (syncing) return { skipped: 'in-progress' };
   syncing = true;
-  // TEMP DIAGNOSTIC (device-history bring-up): every field the on-screen alert needs to
-  // name the exact outcome/failure path. Remove once sync is confirmed on device.
-  const diag = {
-    wrapperHasSync: typeof ViatomDeviceManager.syncStoredRecords === 'function',
-    nativeHasSync: nativeHasSyncStored(),
-    syncedSetSize: 0, sinceName: '', recordsRead: 0, readReason: null,
-    timedOut: false, disconnected: false,
-    valid: 0, fresh: 0, serverRows: 0, dropped: 0, posted: 0, kept: 0, skipped: null,
-  };
   try {
     const synced = await loadSyncedNames();
-    diag.syncedSetSize = synced.size;
     const sinceName = maxName(synced);
-    diag.sinceName = sinceName;
 
-    const { records, reason, timedOut, disconnected } = await readRecords(sinceName);
-    diag.recordsRead = records.length;
-    diag.readReason = reason;
-    diag.timedOut = timedOut;
-    diag.disconnected = disconnected;
+    const { records, reason } = await readRecords(sinceName);
     if (!records.length) {
-      // Map the read outcome to a skip label. 'read-<reason>' keeps the cause visible
-      // (disconnect / timeout / wrapper-missing / threw / no-records) without hanging.
-      diag.skipped = `read-${reason || 'empty'}`;
-      return { posted: 0, dropped: 0, kept: 0, skipped: diag.skipped, diag };
+      // Keep the read outcome in the skip label (read-disconnect / read-timeout /
+      // read-wrapper-missing / read-threw / read-no-records) — the read never hangs.
+      return { posted: 0, dropped: 0, kept: 0, skipped: `read-${reason || 'empty'}` };
     }
 
     const valid = records.filter(isValidRecord);
-    diag.valid = valid.length;
     // Drop anything we've already delivered (idempotency / re-read of the same ring).
     const fresh = valid.filter((r) => !synced.has(String(r.recordName)));
-    diag.fresh = fresh.length;
-    if (!fresh.length) {
-      diag.skipped = 'all-already-synced';
-      return { posted: 0, dropped: 0, kept: 0, skipped: diag.skipped, diag };
-    }
+    if (!fresh.length) return { posted: 0, dropped: 0, kept: 0, skipped: 'all-already-synced' };
 
     const serverRows = await fetchServerRows(days);
-    if (serverRows === null) {
-      diag.skipped = 'no-server-list';
-      return { posted: 0, dropped: 0, kept: fresh.length, skipped: diag.skipped, diag };
-    }
-    diag.serverRows = serverRows.length;
+    if (serverRows === null) return { posted: 0, dropped: 0, kept: fresh.length, skipped: 'no-server-list' };
 
     const { survivors, droppedNames } = applyOverlapGuard(fresh, serverRows);
     survivors.sort((a, b) => a.recordTs - b.recordTs);
@@ -344,11 +314,8 @@ export async function syncHistory(device, { days = 30, onProgress } = {}) {
     }
 
     await saveSyncedNames(synced);
-    diag.dropped = dropped;
-    diag.posted = posted;
-    diag.kept = kept;
     console.log(`[histSync] done: posted=${posted} dropped=${dropped} kept=${kept}`);
-    return { posted, dropped, kept, diag };
+    return { posted, dropped, kept };
   } finally {
     syncing = false;
   }
