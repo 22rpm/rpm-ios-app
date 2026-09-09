@@ -62,9 +62,6 @@ static NSString * const kVoiceEnabledKey         = @"rpm.viatom.voiceEnabled";
 // Device-history sync: gates the history file-protocol responses in commandCompletion
 // so the stored-record read never touches the live BP flow. Active only during a sync.
 @property (nonatomic, assign) BOOL historySyncActive;
-@property (nonatomic, copy) NSString *probeDeviceTime;
-@property (nonatomic, copy) NSString *probePhoneTime;
-@property (nonatomic, copy) NSString *probeFirstFileName;
 @property (nonatomic, copy) NSString *syncSinceName;   // read only files with name > this (throttle)
 @property (nonatomic, strong) NSMutableArray<NSString *> *syncNames;
 @property (nonatomic, strong) NSMutableArray *syncRecords;
@@ -908,11 +905,22 @@ static BOOL vt_try_extract_result(NSData *blob,
 - (void)utilDeployCompletion:(VTMURATUtils * _Nonnull)util {
     NSLog(@"[SDK] Deploy completed ✅");
     self.isDeployed = YES;
-    [self.viatomUtils requestDeviceInfo];
+
+    // Device-clock policy = UTC (see DEVICE_HISTORY_DESIGN "CLOCK POLICY"): set the cuff's
+    // clock to UTC on every connect so stored records' measuring_timestamp are UTC epoch
+    // seconds directly — no offset, no conversion. syncTime writes the NSDate's LOCAL
+    // wall-clock components, so pre-shift by the GMT offset to make those components spell
+    // UTC. The cuff has no on-screen clock, and patients use only our app (which renders
+    // local from stored UTC), so UTC on-device is not patient-visible. Re-asserted every
+    // connect (last-writer-wins) — see the ViHealth inherited-patient risk in the doc.
+    NSInteger gmtOffset = [[NSTimeZone localTimeZone] secondsFromGMTForDate:[NSDate date]];
+    NSDate *utcAsLocal = [NSDate dateWithTimeIntervalSinceNow:(NSTimeInterval)(-gmtOffset)];
+    [self.viatomUtils syncTime:utcAsLocal];
+
     [self.viatomUtils requestBPConfig];
-    if (self.pendingStart) { 
-        self.pendingStart = NO; 
-        [self _startBPAfterReady]; 
+    if (self.pendingStart) {
+        self.pendingStart = NO;
+        [self _startBPAfterReady];
     }
 }
 
@@ -1281,37 +1289,6 @@ commandCompletion:(u_char)cmdType
                                                                   repeats:NO];
 }
 
-#pragma mark - Device info callback
-
-- (void)deviceInfo:(VTMDeviceInfo)info {
-    // TEMP (device-history probe, 1.0.51): the device's OWN clock. cur_time is a
-    // 7-byte packed date — year as a little-endian u_short, then month, day, hour,
-    // minute, second. Compare this to the phone's real time to measure drift BEFORE
-    // any syncTime (see DEVICE_HISTORY_DESIGN finding B). Remove with the probe.
-    {
-        const u_char *t = info.cur_time;
-        unsigned int devYear = (unsigned int)(t[0] | (t[1] << 8));
-        NSLog(@"🕒[HISTPROBE] device cur_time = %04u-%02u-%02u %02u:%02u:%02u  |  phone now = %@",
-              devYear, t[2], t[3], t[4], t[5], t[6], [NSDate date]);
-        // Capture the device clock EVERY time device-info arrives — it fires at CONNECT,
-        // before the probe arms — so store it unconditionally and let the probe surface it.
-        self.probeDeviceTime = [NSString stringWithFormat:@"%04u-%02u-%02u %02u:%02u:%02u",
-                                devYear, t[2], t[3], t[4], t[5], t[6]];
-        self.probePhoneTime = [NSString stringWithFormat:@"%@", [NSDate date]];
-    }
-    if (self.connectedPeripheral) {
-        [self sendEventWithName:@"onDeviceConnected"
-                           body:@{
-                             @"name": self.connectedPeripheral.name ?: @"Unknown",
-                             @"id": self.connectedPeripheral.identifier.UUIDString,
-                             @"deviceType": @(info.device_type),
-                             @"fwVersion": @(info.fw_version),
-                             @"hwVersion": @(info.hw_version),
-                             @"protocolVersion": @(info.protocol_version)
-                           }];
-    }
-}
-
 #pragma mark - Helpers
 
 - (void)exitBPMode {
@@ -1499,11 +1476,13 @@ RCT_EXPORT_METHOD(syncBPConfig:(NSDictionary *)config) {
 }
 
 // Device-history sync: read the cuff's stored readings NEWER than `sinceName`
-// (YYYYMMDDHHMMSS; empty = read all), parse each, and emit them to JS on
-// `onHistorySync`. The read is handled in commandCompletion (gated by
-// historySyncActive). JS (historySync.js) owns dedupe, the overlap guard, posting and
-// persistence. No device-info call here — the stored records carry their own
-// measuring_timestamp, so the sync doesn't depend on the (unreliable) live clock read.
+// (YYYYMMDDHHMMSS; empty = read all), parse each, and emit them to JS on `onHistorySync`.
+// The read is handled in commandCompletion (gated by historySyncActive). JS
+// (historySync.js) owns dedupe, the overlap guard, posting and persistence.
+//
+// Clock: the device clock is set to UTC on every connect (utilDeployCompletion), so a
+// record's measuring_timestamp is UTC epoch seconds directly — no offset applied here. JS
+// trusts only records stamped after its first UTC sync (see DEVICE_HISTORY_DESIGN).
 RCT_EXPORT_METHOD(syncStoredRecords:(NSString *)sinceName) {
     if (!self.connectedPeripheral) {
         NSLog(@"📁[HISTSYNC] no device connected — connect the cuff first");

@@ -33,6 +33,12 @@ import { DEV_DATA_BASE } from './apiConfig';
 
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
 
+// GO-LIVE GATE (device-history): auto-sync on connect posts to prod. The device-clock fix
+// (UTC on connect) is in, but the corrected end-to-end sync — real dates, dedup drops the
+// live overlap, legacy/pre-sync records excluded — is NOT yet verified on device. Keep FALSE
+// until that passes; flip to true for the controlled verification, then flip on for real.
+const HISTORY_SYNC_ENABLED = false;
+
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
 const getMarkerLeftPercent = systolic => {
@@ -798,6 +804,12 @@ const connectionSubscription = ViatomDeviceManager.addListener('onDeviceConnecte
   // dated to its real measurement time. Runs once per connect; historySync.js handles
   // dedupe, the overlap guard, posting and throttling.
   setTimeout(() => {
+    // GO-LIVE GATE (device-history): keep FALSE until a corrected end-to-end sync is verified
+    // on device. When enabled, ~1.5s after connect (link settled, before a measurement) we
+    // read the cuff's stored readings and deliver those taken after the device was first
+    // UTC-synced. historySync.js owns dedupe, the overlap guard, posting, throttling, and the
+    // legacy/pre-sync scoping. See HISTORY_SYNC_ENABLED at top of file and DEVICE_HISTORY_DESIGN.
+    if (!HISTORY_SYNC_ENABLED) return;
     if (syncGuardRef.current) return;      // one sync per connect
     if (realTimeData && realTimeData.phase && realTimeData.phase !== 'done') return; // not mid-measurement
     syncGuardRef.current = true;

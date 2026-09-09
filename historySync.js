@@ -12,21 +12,11 @@
 // and resumes, deduped. There is no separate history queue file.
 
 import axios from 'axios';
-import { NativeModules } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ViatomDeviceManager from './ViatomDeviceManager';
 import { DEV_DATA_BASE } from './apiConfig';
 
 const DEV_TYPE = 'bp';
-
-// Reflect the RAW native module (the compiled binary), not the JS wrapper — this is the
-// true "is syncStoredRecords in the running binary" check, independent of the wrapper
-// whitelist. Wrapper-missing and binary-missing are different failures; this tells them
-// apart.
-function nativeHasSyncStored() {
-  const raw = NativeModules && NativeModules.ViatomDeviceManager;
-  return !!(raw && typeof raw.syncStoredRecords === 'function');
-}
 
 // Persisted set of device filenames (YYYYMMDDHHMMSS, == the record's own key) we have
 // already delivered. Used two ways: (1) throttle — the newest name is passed to native
@@ -35,12 +25,22 @@ function nativeHasSyncStored() {
 const SYNCED_KEY = 'bp_history_synced_names_v1';
 const SYNCED_CAP = 300;
 
-// Overlap guard window. A reading taken with the app OPEN posts LIVE (phone-capture
-// time) AND lands in the ring (device time) — the two differ by a few seconds, so on a
-// later sync the ring copy must be recognized as the same reading and dropped. We match
-// on identical values within +/-90s. 90s (not a looser window) because the device shows
-// genuine repeats ~1 min apart; a wider window risks eating a real second reading.
-const OVERLAP_WINDOW_S = 90;
+// UTC floor: the phone epoch (seconds) at which this install first synced a device to UTC.
+// The device clock is set to UTC on every connect (native utilDeployCompletion), so from
+// that first sync onward every reading's measuring_timestamp is UTC epoch. Records stamped
+// BEFORE the floor are on the device's old (local / mis-set) clock — we can't trust their
+// time, so they are LEGACY: skipped, never posted, never silently corrected. Set once, the
+// first time syncHistory runs on a device that has just been UTC-synced.
+const UTC_FLOOR_KEY = 'bp_history_utc_floor_v1';
+
+// Overlap guard window. A reading taken with the app OPEN posts LIVE (phone-capture time)
+// AND lands in the ring (device measuring_timestamp). With the device clock on UTC, the two
+// times now share a base; the only residual gap is measurement/transmission delay (live
+// time is baked when the phone RECEIVES the result, ~30-60s after the device stamps it) plus
+// ~1s rounding. 120s covers that with margin. The exact (sys,dia,pulse) triple match is the
+// real discriminator; one-to-one matching caps damage (each live row absorbs one ring
+// record). TUNABLE.
+const OVERLAP_WINDOW_S = 120;
 
 // Guard against overlapping syncs (connect + focus can fire close together).
 let syncing = false;
@@ -65,6 +65,22 @@ async function saveSyncedNames(set) {
     await AsyncStorage.setItem(SYNCED_KEY, JSON.stringify(capped));
   } catch (e) {
     console.warn('[histSync] saveSyncedNames failed:', e?.message);
+  }
+}
+
+// Return the UTC floor (epoch s), initializing it to `nowS` on first ever run. Because the
+// device was just UTC-synced this connect, `nowS` is the earliest instant we can vouch the
+// device clock is UTC — so readings stamped at/after it are trustworthy, earlier ones legacy.
+async function loadOrInitUtcFloor(nowS) {
+  try {
+    const raw = await AsyncStorage.getItem(UTC_FLOOR_KEY);
+    const stored = raw != null ? Number(raw) : NaN;
+    if (Number.isFinite(stored) && stored > 0) return stored;
+    await AsyncStorage.setItem(UTC_FLOOR_KEY, String(nowS));
+    return nowS;
+  } catch (e) {
+    console.warn('[histSync] utc floor load/init failed, using now:', e?.message);
+    return nowS;
   }
 }
 
@@ -113,14 +129,11 @@ function readRecords(sinceName, timeoutMs = 120000) {
       console.warn('[histSync] read timed out — leaving records on device for next connect');
       finish([], 'timeout');
     }, timeoutMs);
-    // Distinguish the two silent-failure layers: wrapper-missing (JS whitelist) vs
-    // binary-missing (stale native). The wrapper forwards to the raw module; if the raw
-    // module lacks the method the wrapper's bare call throws (caught below).
+    // Guard the JS whitelist wrapper: if syncStoredRecords isn't forwarded, the call is a
+    // silent no-op (see ViatomDeviceManager.js maintenance rule — this bit us once).
     if (typeof ViatomDeviceManager.syncStoredRecords !== 'function') {
       console.warn('[histSync] WRAPPER is missing syncStoredRecords — update ViatomDeviceManager.js');
       return finish([], 'wrapper-missing');
-    } else if (!nativeHasSyncStored()) {
-      console.warn('[histSync] native binary is MISSING syncStoredRecords — stale binary, clean-build');
     }
     try {
       ViatomDeviceManager.syncStoredRecords?.(sinceName || '');
@@ -180,6 +193,8 @@ async function fetchServerRows(days) {
 // matched oldest-first to the nearest unconsumed server row with identical values
 // within OVERLAP_WINDOW_S. Every drop is logged with both sides so testing can see
 // exactly what was suppressed and why.
+// Matches on `recordTs` directly: the device clock is UTC, so measuring_timestamp already
+// shares a base with the live server rows' measured_at. See OVERLAP_WINDOW_S for the budget.
 function applyOverlapGuard(fresh, serverRows) {
   const consumed = new Set();
   const survivors = [];
@@ -215,6 +230,7 @@ function applyOverlapGuard(fresh, serverRows) {
 }
 
 function buildBody(r, device) {
+  // Device clock is UTC, so measuring_timestamp (recordTs) IS the UTC measurement time.
   const iso = new Date(Number(r.recordTs) * 1000).toISOString();
   return {
     devId: (device && device.id) || 'bp_device_001',
@@ -227,7 +243,10 @@ function buildBody(r, device) {
       // Deterministic per reading: the server dedups on (user, dev_type, timestamp),
       // so re-posting the same ring record is a no-op even if local state is lost.
       timestamp: iso,
-      measured_at: Number(r.recordTs), // epoch s — the device's true measurement time
+      measured_at: Number(r.recordTs), // epoch s — UTC measurement time (device clock is UTC)
+      // Audit trail: keep the raw device measuring_timestamp so the stored value is always
+      // traceable to what the device reported, even if the clock policy changes later.
+      raw_ts: Number(r.recordTs),
       date: undefined,
       time: undefined,
       source: 'history',
@@ -256,8 +275,7 @@ export async function syncHistory(device, { days = 30, onProgress } = {}) {
 
     const { records, reason } = await readRecords(sinceName);
     if (!records.length) {
-      // Keep the read outcome in the skip label (read-disconnect / read-timeout /
-      // read-wrapper-missing / read-threw / read-no-records) — the read never hangs.
+      // read-<reason>: disconnect / timeout / wrapper-missing / threw / no-records. Never hangs.
       return { posted: 0, dropped: 0, kept: 0, skipped: `read-${reason || 'empty'}` };
     }
 
@@ -266,10 +284,42 @@ export async function syncHistory(device, { days = 30, onProgress } = {}) {
     const fresh = valid.filter((r) => !synced.has(String(r.recordName)));
     if (!fresh.length) return { posted: 0, dropped: 0, kept: 0, skipped: 'all-already-synced' };
 
-    const serverRows = await fetchServerRows(days);
-    if (serverRows === null) return { posted: 0, dropped: 0, kept: fresh.length, skipped: 'no-server-list' };
+    // Clock scoping: the device clock is set to UTC on connect, so recordTs is UTC epoch.
+    // Trust only readings stamped at/after this install's first UTC sync (utcFloor); earlier
+    // ring records are on the device's old local clock — LEGACY: skipped, never posted, never
+    // silently corrected. Then sanity-bound (no future / not absurdly old). Records older than
+    // the floor also fall below `sinceName` once anything newer posts, so the throttle stops
+    // re-reading them — the skip is self-limiting.
+    const nowS = Math.floor(Date.now() / 1000);
+    const utcFloor = await loadOrInitUtcFloor(nowS);
+    const MAX_FUTURE_S = 300;            // allow small skew
+    const MAX_AGE_S = 400 * 24 * 3600;   // ~13 months
+    let legacy = 0;
+    let outOfBounds = 0;
+    const datable = [];
+    for (const r of fresh) {
+      const ts = Number(r.recordTs);
+      if (ts < utcFloor) { legacy += 1; continue; }                    // pre-UTC-sync, not datable
+      if (ts > nowS + MAX_FUTURE_S || ts < nowS - MAX_AGE_S) {
+        outOfBounds += 1;
+        console.warn(`[histSync] SANITY skip ${r.recordName}: ts=${ts} ` +
+          `(${new Date(ts * 1000).toISOString()}) out of bounds`);
+        continue;
+      }
+      datable.push(r);
+    }
+    if (legacy) console.log(`[histSync] ${legacy} legacy pre-UTC-sync record(s) skipped (not datable)`);
+    if (!datable.length) {
+      return { posted: 0, dropped: 0, kept: 0, legacy, outOfBounds,
+               skipped: legacy ? 'all-legacy' : 'all-out-of-bounds' };
+    }
 
-    const { survivors, droppedNames } = applyOverlapGuard(fresh, serverRows);
+    const serverRows = await fetchServerRows(days);
+    if (serverRows === null) {
+      return { posted: 0, dropped: 0, kept: datable.length, legacy, skipped: 'no-server-list' };
+    }
+
+    const { survivors, droppedNames } = applyOverlapGuard(datable, serverRows);
     survivors.sort((a, b) => a.recordTs - b.recordTs);
     const dropped = droppedNames.length;
 
@@ -314,8 +364,8 @@ export async function syncHistory(device, { days = 30, onProgress } = {}) {
     }
 
     await saveSyncedNames(synced);
-    console.log(`[histSync] done: posted=${posted} dropped=${dropped} kept=${kept}`);
-    return { posted, dropped, kept };
+    console.log(`[histSync] done: posted=${posted} dropped=${dropped} kept=${kept} legacy=${legacy}`);
+    return { posted, dropped, kept, legacy };
   } finally {
     syncing = false;
   }

@@ -337,3 +337,95 @@ prod handoff warns about (uncommitted/undeployed drift going unnoticed).
   (or its nginx route) is down — the same class of monitor the cert/nginx incident lacked.
 - Optional: a staleness surface like `oldestPendingAgeMs` (outbox) — "device has N unsynced
   readings older than X" — so a stalled backfill shows up even when the app looks healthy.
+
+## CLOCK BEHAVIOR — RESOLVED (2026-09-09); the correction re-scoped much simpler
+
+Finding B assumed we'd measure a device-clock offset and apply it at parse. On-device testing
+overturned the premises behind that:
+
+1. **The device clock RUNS.** It is not frozen. Records get real, advancing, filename-matching
+   Unix `measuring_timestamp`s (SDK: `e.g. 0: 1970-01-01`, i.e. Unix epoch).
+2. **`cur_time` (VTMDeviceInfo.cur_time) is CACHED by the VTMProductLib framework**, snapshotted
+   ~once per app process. Plain `requestDeviceInfo` returns the stale copy; it cannot be forced
+   fresh short of `syncTime` (which refreshes it) or an app restart. Three byte-identical reads
+   fooled us into a "frozen clock" conclusion. **Never measure an offset from `cur_time`.**
+3. **The clock ran ~7h behind UTC because it was set to LOCAL (Pacific) time.** `syncTime:` writes
+   the LOCAL wall-clock components of the NSDate you pass; records were therefore stamped in local
+   time, which read ~7h off when interpreted as UTC. That is the entire "7–8h offset" saga.
+
+### ⚠️ CLOCK POLICY IS AN OPEN, PATIENT-FACING DECISION — not settled
+
+> **Writing UTC to the device makes the CUFF'S OWN DISPLAY show UTC.** Patients are Pacific; a
+> reading taken at 8am would show on the device as 3pm, disagreeing with the dashboard. That is a
+> patient-facing consequence and must NOT be traded away for internal convenience.
+>
+> **UPDATE (manual check, below): the BP2A screen shows NO clock — only sys/dia/pulse and ECG.**
+> So UTC-on-device is not visible to the patient on the device itself; the only time surface is
+> the app/dashboard, which we render in local from stored UTC. The blast radius is small — but
+> confirm on the physical unit that history entries aren't shown with a time on-screen, and note
+> the ViHealth tug-of-war caveat below.
+
+**DECIDED (2026-09-09): option 2 — device runs UTC.** Rationale: this deployment ships the cuffs
+and does patient setup, and patients use OUR app only (never ViHealth), so there is no competing
+clock-setter and the device's lack of a screen clock means UTC is never patient-visible. Our
+app/dashboard renders local from stored UTC. Options 1 and 3 recorded below for context.
+
+Options, in the preference order considered before the deployment facts settled it on option 2:
+
+1. **`syncTimeZone` (time + zone), device displays LOCAL — PREFERRED if it works.** The device is
+   timezone-aware: `time_utc` ("设备时区，默认8时区", default zone 8 = China — note: NOT Pacific,
+   so ours is likely mis-zoned today), `syncTimeZone:` (0xC0), and `VTMDeviceTimeZone.timeZone`.
+   Set the patient's correct local time AND zone. Two possible device behaviors, decided by test:
+   - (a) device stamps `measuring_timestamp` as **true UTC** (applies the zone) → **best case:
+     correct data AND correct local display, no conversion.**
+   - (b) device still stamps local-wall-as-epoch (zone only drives display) → we convert to UTC
+     using the zone WE set and record per reading (deterministic — no guessing, unlike the failed
+     first attempt). Display stays correct-local for the patient.
+2. **`syncTime` UTC (device runs UTC), `measured_at = record_ts`.** Simplest data path, DST-proof,
+   but the display consequence above. Only acceptable if the screen shows no patient-facing clock.
+3. **Device local + convert-on-read with a guessed zone.** REJECTED — this is what misdated the
+   first 50 rows (per-reading DST/zone ambiguity).
+
+**Empirical fact so far:** with plain `syncTime` (no zone) the device stamped local-wall-as-epoch
+(records read ~7h off UTC), so it did NOT auto-derive UTC. Option 1(a) is therefore unproven and
+must be tested: `syncTimeZone` to the correct Pacific zone, take a live reading, inspect whether
+its `measuring_timestamp` equals true UTC (1a) or local-wall (1b). Do that BEFORE stripping code
+toward any one policy.
+
+### Viatom/Wellue app + device display — patient expectation
+
+Findings (Wellue BP2A manual + product pages, 2026-09-09; confirm on the physical unit):
+- **Device screen shows NO clock.** The manual's display description covers only the measurement
+  screens (systolic/diastolic/pulse; ECG waveform/HR/result). No time-of-day on the device. So a
+  UTC device clock is not patient-visible on the device. (Not 100% explicit that on-device history
+  browsing omits a timestamp — verify on the unit.)
+- **The companion app is ViHealth** (a.k.a. VHealth), iOS/Android. It **auto-syncs the device
+  clock on connect** and is where history + timestamps are actually viewed. So a patient who used
+  ViHealth saw times **in the app**, in their phone's local zone — that's the expectation to match,
+  and we match it by storing UTC and rendering local in our app/dashboard.
+- **ViHealth tug-of-war — RISK TO CHECK IF WE INHERIT A ViHealth-PROVISIONED PATIENT.** Not a
+  concern for our own deployment (we ship + set up the cuffs; patients use our app only). But if we
+  ever onboard a cuff a patient previously set up with ViHealth, ViHealth may have set the clock to
+  local and could keep re-setting it if the patient still runs it — fighting our UTC sync and
+  producing mixed-zone `measuring_timestamp`s. Mitigation if that case arises: our `syncTime(UTC)`
+  on every connect re-asserts UTC (last-writer-wins), and the sanity bounds + post-sync-only trust
+  catch a reading stamped under the wrong clock. Flag for onboarding: confirm the patient isn't
+  running ViHealth against the same cuff.
+
+Net: the patient-display objection to UTC is largely relieved (no device clock), so option 2 is
+viable; option 1 (`syncTimeZone` local) remains preferable for ViHealth-consistency and is worth
+the test. Either way, our app/dashboard renders local from stored UTC.
+
+Sources: Wellue BP2A manual (manuals.plus), Wellue BP2 user manual (ManualsLib), getwellue.com.
+
+### Re-scoped correction (replaces the offset-at-parse machinery)
+
+- `syncTime(UTC)` on connect, before reading records.
+- New readings (taken after a UTC sync) are already correct: `measured_at = record_ts`, offset ~0.
+- Overlap-guard window can tighten back toward ~120s (only measurement/transmission delay remains;
+  the offset jitter that forced 300s is gone).
+- **Transition wrinkle:** readings already in the ring from BEFORE the first UTC sync are still on
+  the old local clock (~+7h). After the first UTC sync the ring is a MIX of local-stamped (old) and
+  UTC-stamped (new) records, indistinguishable by value alone. Scope v1 to trust only records
+  stamped after a known UTC sync; treat pre-sync ring records (and the existing 50 DB rows) as
+  legacy — best-effort or excluded, not silently corrected.
