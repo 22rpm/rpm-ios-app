@@ -429,3 +429,80 @@ Sources: Wellue BP2A manual (manuals.plus), Wellue BP2 user manual (ManualsLib),
   UTC-stamped (new) records, indistinguishable by value alone. Scope v1 to trust only records
   stamped after a known UTC sync; treat pre-sync ring records (and the existing 50 DB rows) as
   legacy — best-effort or excluded, not silently corrected.
+
+---
+
+# END-TO-END TEST SEQUENCE (corrected sync) — RUN THIS BEFORE FLIPPING THE FLAG (2026-09-13)
+
+The clock correction (UTC-on-connect) is in; the corrected sync has NOT been verified on device.
+This is the current, ordered procedure for the as-built code — it supersedes the older "Device
+test checklist" above for the corrected build. Requires a real iPhone + the cuff (BLE; the
+simulator can't). Build `feature/device-history` to the device (native `syncTime`/
+`syncStoredRecords` mean a Metro-only reload is NOT enough).
+
+**Step 0 — flip the flag.** `BloodPressure.js:40` `HISTORY_SYNC_ENABLED = false → true`. Build to device.
+
+**Step 1 — first connect = clock correction + floor init + EPOCH SANITY CHECK.**
+Connect the cuff once. Native `syncTime(UTC)` (`ViatomDeviceManager.m:918`) rewrites the cuff clock
+to UTC; the first `syncHistory` run stores the UTC floor (`bp_history_utc_floor_v1 = now`).
+- **CHECK THE EPOCH BASE FIRST** — the one silent-killer: log a raw `recordTs` and confirm
+  `new Date(recordTs*1000)` ≈ now (2026), not 1956/2052. Viatom firmware sometimes stores
+  seconds-since-2000; if so, every record falls outside the sanity bounds (`MAX_AGE_S≈13mo`,
+  `MAX_FUTURE_S=300`) → **0 posted, all rejected**. Confirm before trusting any other result.
+
+**Step 2 — backfill path.** Disconnect the app. Take 2–3 readings on the cuff **while it is NOT
+connected to the app** (ring buffer only, not the live path). Because the clock was just corrected
+and the floor just set, these are UTC-correct and after the floor. Reconnect → ~1.5s later
+`syncHistory` fires (`BloodPressure.js:817`) → posts them.
+- Verify: toast "Added N past reading(s)"; rows dated to **measurement time**; server `dev_data`
+  shows `measured_at = recordTs`, `source='history'`.
+
+**Step 3 — overlap guard (the main correctness risk).** Take a reading **while connected** (live
+path posts it; it also lands in the ring). Reconnect → `syncHistory` must **drop** it (same
+`(sys,dia,pulse)` within ±120s of the server row; `OVERLAP_WINDOW_S`, historySync.js). **Verify no
+duplicate.** This JS guard is the ONLY thing preventing live-vs-history dupes — the server
+`(user_id,dev_type,timestamp)` key does NOT catch them, because live stamps *receipt* time and
+history stamps *measurement* time (they differ ~30–60s).
+
+**Step 4 — failure/resume.** Mid-sync, enable airplane mode. Confirm the sync stops on the first
+failed POST, leaves the rest on the device, marks nothing partially, and resumes + clears on the
+next connect with network back (a record joins the synced-set only on confirmed success).
+
+If Steps 1–4 pass, the corrected sync is verified end-to-end and `HISTORY_SYNC_ENABLED` can go live.
+
+## REACHABILITY LIMIT — pre-correction cuff history is PERMANENTLY unreachable (state plainly)
+The UTC floor skips any record with `recordTs < floor` (records taken before this install's first
+corrected connect), counting them "legacy" and never posting them. This is CORRECT behavior — it
+prevents re-dating readings captured on the old mis-set (Pacific-local) clock. But the consequence
+must be stated so nobody expects otherwise: **the feature cannot recover the readings that
+motivated it.** The patient's outage-window readings are gone from this path unless her cuff's
+clock happened to already be correct when they were taken. Device-history sync backfills only
+readings taken *after* the clock was corrected; it is not a recovery tool for pre-correction data.
+
+## OPEN DECISION 1 — the 50 legacy misdated `dev_data` rows
+The corrected sync will NOT touch them (the UTC-floor skip means pre-floor records are never
+re-posted, so enabling sync creates no corrected duplicates). Their true measurement time is
+unrecoverable (the clock was wrong when recorded), so "correct in place" = fabricating timestamps,
+which is worse than leaving them — especially for anything billing-adjacent.
+- **These rows are all from the BRING-UP DEVICES `51F0F5CA` and `7C46598B` — not patients**
+  (to be confirmed with the classify query below). Recommendation: **delete the bring-up probe
+  rows; leave any genuine patient rows untouched** (don't guess corrected times; they already
+  bucket on `created_at` receipt). No prod backups — confirm the split before deleting.
+- Classify (run on the box):
+  ```sql
+  SELECT d.user_id, u.name, r.role_type, d.dev_id, COUNT(*) n,
+         MIN(d.created_at) first_seen, MAX(d.created_at) last_seen
+  FROM dev_data d LEFT JOIN users u ON u.id=d.user_id LEFT JOIN role r ON r.user_id=d.user_id
+  WHERE d.dev_type='bp' AND d.dev_id IN ('51F0F5CA','7C46598B')
+  GROUP BY d.user_id, d.dev_id ORDER BY n DESC;
+  ```
+
+## OPEN DECISION 2 — merge into `fix/bp-auto-reconnect` for 1.0.51
+**Yes, and it's a fast-forward.** `feature/device-history` is branched off `fix/bp-auto-reconnect`'s
+exact tip + 13 commits, 0 divergence — it contains ALL the shipped 1.0.50 reconnect fixes (strict
+superset), so merging back can't regress them and needs no reconciliation.
+- **Gate the FLAG on the on-device test, not the merge.** The sync code is inert while
+  `HISTORY_SYNC_ENABLED=false`, so folding the 13 commits into 1.0.51 with the **flag OFF** is
+  zero-runtime-risk. Ship 1.0.51 with the flag off unless Steps 0–4 above have passed on a real
+  cuff (including the epoch check), in which case flip it on and ship it enabled. Land the branch
+  whenever convenient; enable the feature only after the test passes.
