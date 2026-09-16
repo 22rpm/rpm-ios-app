@@ -399,7 +399,7 @@ export default function Login({ navigation }) {
     } else {
       // Handle different error scenarios
       if (response.status === 401) {
-        setError(data.message || 'Invalid credentials. Please check your email/username and password.');
+        setError(data.message || 'Please check your email, username, or phone number and password.');
       } else if (response.status === 500) {
         setError('Server error. Please try again later.');
       } else if (response.status === 404) {
@@ -686,9 +686,9 @@ export default function Login({ navigation }) {
               }
             ]}
           >
-            {/* Email/Username Field */}
+            {/* Email / Username / Phone Field */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Email or Username</Text>
+              <Text style={styles.label}>Email, Username, or Phone</Text>
               <TextInput
                 style={styles.input}
                 value={email}
@@ -696,9 +696,9 @@ export default function Login({ navigation }) {
                   setEmail(text);
                   setError('');
                 }}
-                placeholder="Enter your email or username"
+                placeholder="Email, username, or phone number"
                 placeholderTextColor="#999"
-                keyboardType="email-address"
+                keyboardType="default"
                 autoCapitalize="none"
                 autoCorrect={false}
               />
@@ -766,14 +766,6 @@ export default function Login({ navigation }) {
             )}
           </Animated.View>
         )}
-
-        {/* Footer - Always show at bottom */}
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>Developed By</Text>
-          <Text style={[styles.footerText, styles.footerCompany]}>
-            Revive Medical Technologies Inc.
-          </Text>
-        </View>
       </ScrollView>
 
       {/* OTP Verification Modal */}
@@ -905,6 +897,7 @@ const styles = StyleSheet.create({
   formContainer: {
     paddingHorizontal: width * 0.1,
     marginTop: height * 0.03,
+    paddingBottom: height * 0.03,
     flex: 1,
   },
   inputGroup: {
@@ -983,21 +976,6 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: width * 0.04,
     fontWeight: 'bold',
-  },
-  footer: {
-    paddingBottom: height * 0.03,
-    alignItems: 'center',
-    width: '100%',
-    marginTop: height * 0.05,
-  },
-  footerText: {
-    fontSize: width * 0.035,
-    color: '#a1a1a1',
-  },
-  footerCompany: {
-    fontWeight: '600',
-    fontSize: width * 0.04,
-    marginTop: height * 0.005,
   },
   // Modal styles
   modalContainer: {
