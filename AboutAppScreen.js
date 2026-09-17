@@ -99,9 +99,6 @@ export default function AboutAppScreen({ navigation }) {
         {/* Company Info Card */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Company</Text>
-          {/* <Text style={styles.companyInfo}>
-            Developed Revive Medical Technologies Inc.
-          </Text> */}
           <Text style={styles.companyInfo}>
             © 2025 22-RPM. All rights reserved.
           </Text>
