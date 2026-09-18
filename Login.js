@@ -32,6 +32,15 @@ export default function Login({ navigation }) {
   const [showManualLogin, setShowManualLogin] = useState(false);
   const [isAutoAuthenticating, setIsAutoAuthenticating] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
+  // Forgot-password (PR-3): request a reset code to the contact on file, then set a new password.
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotStep, setForgotStep] = useState(1); // 1 = request code, 2 = enter code + new password
+  const [forgotIdentifier, setForgotIdentifier] = useState('');
+  const [forgotCode, setForgotCode] = useState('');
+  const [forgotNewPassword, setForgotNewPassword] = useState('');
+  const [forgotBusy, setForgotBusy] = useState(false);
+  const [forgotError, setForgotError] = useState('');
+  const [forgotInfo, setForgotInfo] = useState('');
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
@@ -628,6 +637,84 @@ export default function Login({ navigation }) {
     return () => clearInterval(interval);
   }, []);
 
+  // ---- Forgot password (PR-3) --------------------------------------------------
+  const openForgotPassword = () => {
+    setForgotIdentifier(email || '');
+    setForgotCode('');
+    setForgotNewPassword('');
+    setForgotStep(1);
+    setForgotError('');
+    setForgotInfo('');
+    setShowForgotModal(true);
+  };
+
+  // Step 1: ask the server to send a reset code to the contact on file. The response is
+  // intentionally generic (anti-enumeration), so we always advance to step 2.
+  const handleForgotRequest = async () => {
+    const identifier = forgotIdentifier.trim();
+    if (!identifier) {
+      setForgotError('Enter your email, username, or phone number.');
+      return;
+    }
+    setForgotBusy(true);
+    setForgotError('');
+    setForgotInfo('');
+    try {
+      await fetch(`${API_BASE}/api/auth/password-reset/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier }),
+      });
+      setForgotStep(2);
+      setForgotInfo(
+        'If an account matches, a reset code was sent to the phone or email on file. Enter it below.'
+      );
+    } catch (e) {
+      setForgotError('Network error. Please check your connection and try again.');
+    } finally {
+      setForgotBusy(false);
+    }
+  };
+
+  // Step 2: submit the code + new password.
+  const handleForgotConfirm = async () => {
+    const identifier = forgotIdentifier.trim();
+    const code = forgotCode.trim();
+    if (!code) {
+      setForgotError('Enter the code you received.');
+      return;
+    }
+    if (!forgotNewPassword || forgotNewPassword.length < 8) {
+      setForgotError('New password must be at least 8 characters.');
+      return;
+    }
+    setForgotBusy(true);
+    setForgotError('');
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/password-reset/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, code, new_password: forgotNewPassword }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.ok) {
+        setShowForgotModal(false);
+        setEmail(identifier);
+        setPassword('');
+        Alert.alert(
+          'Password reset',
+          'Your password has been reset. You can now sign in with your new password.'
+        );
+      } else {
+        setForgotError(data.message || 'Invalid or expired code.');
+      }
+    } catch (e) {
+      setForgotError('Network error. Please check your connection and try again.');
+    } finally {
+      setForgotBusy(false);
+    }
+  };
+
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -739,6 +826,15 @@ export default function Login({ navigation }) {
               )}
             </TouchableOpacity>
 
+            {/* Forgot password (PR-3) */}
+            <TouchableOpacity
+              style={styles.forgotLink}
+              onPress={openForgotPassword}
+              disabled={isLoading}
+            >
+              <Text style={styles.forgotLinkText}>Forgot password?</Text>
+            </TouchableOpacity>
+
             {/* Face ID Button (Manual Trigger) - Only show if we have stored credentials */}
             {isBiometricSupported && hasBiometricCredentials && (
               <TouchableOpacity 
@@ -818,6 +914,86 @@ export default function Login({ navigation }) {
                   <ActivityIndicator color="#fff" />
                 ) : (
                   <Text style={styles.verifyButtonText}>Verify</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Forgot Password Modal (PR-3) — step 1 request code, step 2 enter code + new password */}
+      <Modal
+        visible={showForgotModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowForgotModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Reset Password</Text>
+
+            {forgotStep === 1 ? (
+              <>
+                <Text style={styles.modalSubtitle}>
+                  Enter your email, username, or phone number. We'll send a reset code to the phone or
+                  email on file.
+                </Text>
+                <TextInput
+                  style={styles.otpInput}
+                  value={forgotIdentifier}
+                  onChangeText={(t) => { setForgotIdentifier(t); setForgotError(''); }}
+                  placeholder="Email, username, or phone number"
+                  placeholderTextColor="#999"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </>
+            ) : (
+              <>
+                {forgotInfo ? <Text style={styles.modalSubtitle}>{forgotInfo}</Text> : null}
+                <TextInput
+                  style={styles.otpInput}
+                  value={forgotCode}
+                  onChangeText={(t) => { setForgotCode(t); setForgotError(''); }}
+                  placeholder="Enter reset code"
+                  placeholderTextColor="#999"
+                  keyboardType="numeric"
+                  maxLength={6}
+                />
+                <TextInput
+                  style={styles.otpInput}
+                  value={forgotNewPassword}
+                  onChangeText={(t) => { setForgotNewPassword(t); setForgotError(''); }}
+                  placeholder="New password (min 8 characters)"
+                  placeholderTextColor="#999"
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </>
+            )}
+
+            {forgotError ? <Text style={styles.errorText}>{forgotError}</Text> : null}
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => { setShowForgotModal(false); setForgotError(''); }}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalButton, styles.verifyButton, forgotBusy && styles.buttonDisabled]}
+                onPress={forgotStep === 1 ? handleForgotRequest : handleForgotConfirm}
+                disabled={forgotBusy}
+              >
+                {forgotBusy ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.verifyButtonText}>
+                    {forgotStep === 1 ? 'Send code' : 'Reset password'}
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -1040,5 +1216,14 @@ const styles = StyleSheet.create({
   verifyButtonText: {
     color: 'white',
     fontWeight: 'bold',
+  },
+  forgotLink: {
+    marginTop: 14,
+    alignItems: 'center',
+  },
+  forgotLinkText: {
+    color: '#1f6feb',
+    fontWeight: '600',
+    fontSize: 14,
   },
 });
