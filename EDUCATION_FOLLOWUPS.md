@@ -76,3 +76,44 @@ Open item: it's **online-only**. An elderly patient offline can't load it. Follo
 for offline: bundle the guide (HTML + assets, or re-authored native ArticleScreen
 content) as a fallback when the network fails. Same pattern applies to future owned
 articles — hosted/updatable with a bundled fallback.
+
+## 4. TWO sources of truth for "how to take a reading" — host clinical, keep app-UI hardcoded
+
+**The duplication (2026-09-19).** The reading-technique guidance exists in two places that
+can drift:
+- **Hosted:** `bp-guide` — "How to take your blood pressure" → in-app browser →
+  `https://twentytwohealth.com/bp-guide/` (web-updatable, styled, Spanish, step photos).
+  Covers "setup, cuff placement, and taking a reading."
+- **Hardcoded:** `take-reading` — "Taking a reading in the app" (`helpContent.js`), rendered
+  natively by `ArticleScreen`, with its OWN steps ("sit quietly 5 minutes, cuff on the bare
+  upper arm, press Start"). This overlaps the hosted guide's technique. Editing the website
+  updates the hosted guide but NOT this copy — they silently disagree. Surfaced updating the
+  website's "how to take a reading" page.
+
+**The dividing line (decide by CONTENT TYPE, not "education vs help"):**
+- **HOST** (single source, web-updatable, with the #3 offline-bundle fallback): clinical /
+  health / device-technique content. Reading-level-sensitive, changes independently of the app
+  version, benefits from styling/photos/Spanish. → `bp-guide`, and `take-reading`'s technique.
+- **KEEP HARDCODED** (ships WITH the matching app build): app-UI / navigation instructions —
+  "tap the Readings tab", the "Waiting" status, "tap Messages". These describe THIS build's UI;
+  hosting them risks the web copy describing a UI the installed app doesn't have (drift the
+  other way). Versioning them with the app is correct, not debt.
+
+**Per-article decision + fix scope:**
+- **`take-reading` → HOST it (merge into `bp-guide`).** Its technique already overlaps the
+  hosted guide ("taking a reading"). Fix: fold the technique steps into the hosted `bp-guide`
+  page, then in `helpContent.js` either delete the `take-reading` item (redundant) or swap its
+  `body: [...]` for `url: '<hosted app-help page>'`. Mechanically trivial — `Education.js`
+  already routes an item with a `url` to the in-app browser and one with a `body` to
+  `ArticleScreen`, so no component change. **Cost: ONE App Store release** (`helpContent.js` is
+  in the JS bundle) **+ the website must host the merged content first.** After that release the
+  content is web-only forever.
+- **`not-syncing` → KEEP HARDCODED.** It's app behavior (the offline outbox / "Waiting" state)
+  specific to this build; hosting invites web↔app drift on UI specifics.
+- **`messaging` → KEEP HARDCODED.** Pure app-UI ("Messages tab"). Same reasoning.
+
+**The one-release caveat (why not host everything).** Every conversion (`body`→`url`) itself
+ships in the JS bundle, so it costs one release; the payoff is only realized on the NEXT content
+change. So host the content that actually changes on its own schedule (clinical), and hardcode
+the content that only changes when the app UI changes (app-UI). This refines #2's future-article
+list: condition + device-technique articles → hosted; app-help that's UI-instructional → in-app.
